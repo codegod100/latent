@@ -135,14 +135,8 @@ async function authenticateWithServer(server: any) {
 async function refreshMessages(beforeId: string | null = null) {
   const container = document.getElementById('message-list')!
   if (!currentChannel || !currentServer || currentServer.error) { container.innerHTML = '<div style="padding:1rem;">Select a channel.</div>'; return }
-  
-  if (beforeId) {
-    if (isLoadingOlder || !hasMoreMessages) return
-    isLoadingOlder = true
-  } else {
-    container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Loading...</div></div>`
-    currentMessages = []; hasMoreMessages = true
-  }
+  if (beforeId) { if (isLoadingOlder || !hasMoreMessages) return; isLoadingOlder = true } 
+  else { container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Loading...</div></div>`; currentMessages = []; hasMoreMessages = true }
 
   try {
     const limit = 50
@@ -151,16 +145,9 @@ async function refreshMessages(beforeId: string | null = null) {
     const data = await res.json()
     if (data.length < limit) hasMoreMessages = false
     if (beforeId) {
-      const oldScrollHeight = container.scrollHeight
-      currentMessages = [...currentMessages, ...data]
-      renderMessages(false)
-      container.scrollTop = container.scrollHeight - oldScrollHeight
-      isLoadingOlder = false
-    } else {
-      currentMessages = data
-      renderMessages(true)
-      setupWebSocket()
-    }
+      const oldScrollHeight = container.scrollHeight; currentMessages = [...currentMessages, ...data]; renderMessages(false)
+      container.scrollTop = container.scrollHeight - oldScrollHeight; isLoadingOlder = false
+    } else { currentMessages = data; renderMessages(true); setupWebSocket() }
   } catch (e) { if (!beforeId) container.innerHTML = '<div style="padding:1rem; color:#f23f42;">Offline</div>' }
 }
 
@@ -175,7 +162,7 @@ function renderMessages(shouldScrollBottom = true) {
     const parentMsg = m.parent; 
     return `
       <div class="msg-item" id="msg-${m.id}">
-        ${parentMsg ? `<div class="msg-reply-to" onclick="window.jumpToMessage('${parentMsg.id}')">
+        ${parentMsg ? `<div class="msg-reply-to" onclick="window.jumpToMessage('${parentMsg.id}', '${currentServer.host}', '${currentChannel.id}')">
           <span style="opacity:0.6">@${parentMsg.handle}:</span> ${parentMsg.content.substring(0, 60)}${parentMsg.content.length > 60 ? '...' : ''}
         </div>` : ''}
         <div class="msg-actions">
@@ -199,35 +186,41 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) {
-    input.value = ''
-    input.focus()
-  }
+  if (input) { input.value = ''; input.focus() }
   document.getElementById('search-results')!.style.display = 'none'
   document.getElementById('clear-search')!.style.display = 'none'
 };
 
-(window as any).jumpToMessage = async (id: string) => {
-  const existingEl = document.getElementById(`msg-${id}`)
-  if (existingEl) {
-    existingEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    existingEl.classList.add('flash-highlight')
-    setTimeout(() => existingEl.classList.remove('flash-highlight'), 3000)
-    return
+(window as any).jumpToMessage = async (id: string, serverHost?: string, channelId?: string) => {
+  // If server/channel specified and different, switch first
+  if (serverHost && serverHost !== currentServer?.host) {
+    const targetServer = SERVERS.find(s => s.host === serverHost); if (!targetServer) return
+    currentServer = targetServer; currentChannel = targetServer.channels.find((c: any) => c.id === channelId) || targetServer.channels[0]
+    renderAll()
+  } else if (channelId && channelId !== currentChannel?.id) {
+    currentChannel = currentServer.channels.find((c: any) => c.id === channelId) || currentServer.channels[0]
+    renderAll()
   }
+
+  const checkAndHighlight = () => {
+    const el = document.getElementById(`msg-${id}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('flash-highlight')
+      setTimeout(() => el.classList.remove('flash-highlight'), 3000)
+      return true
+    }
+    return false
+  }
+
+  if (checkAndHighlight()) return
+
   const container = document.getElementById('message-list')!
   container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Jumping to message...</div></div>`
   try {
     const res = await fetch(`${currentServer.url}/api/message-context?channelId=${currentChannel.id}&id=${id}`)
-    currentMessages = await res.json()
-    hasMoreMessages = true
-    renderMessages(false)
-    const targetEl = document.getElementById(`msg-${id}`)
-    if (targetEl) {
-      targetEl.scrollIntoView({ block: 'center' })
-      targetEl.classList.add('flash-highlight')
-      setTimeout(() => targetEl.classList.remove('flash-highlight'), 3000)
-    }
+    currentMessages = await res.json(); hasMoreMessages = true; renderMessages(false)
+    setTimeout(checkAndHighlight, 100)
   } catch (e) { log('Jump failed', e) }
 };
 
@@ -236,27 +229,41 @@ function renderMessages(shouldScrollBottom = true) {
   const clearBtn = document.getElementById('clear-search')!
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
   
-  resultsEl.style.display = 'block'
-  clearBtn.style.display = 'block'
-  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching...</div>'
+  resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
+  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
+  
   try {
-    const res = await fetch(`${currentServer.url}/api/search?channelId=${currentChannel.id}&q=${encodeURIComponent(query)}`)
-    const results = await res.json()
-    if (results.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results</div>'; return }
+    // Search across ALL servers in parallel
+    const searchTasks = SERVERS.filter(s => !s.error).map(async (server) => {
+      try {
+        const res = await fetch(`${server.url}/api/search?q=${encodeURIComponent(query)}`)
+        const results = await res.json()
+        return { server, results }
+      } catch (e) { return { server, results: [] } }
+    })
+
+    const allServerResults = await Promise.all(searchTasks)
+    const flatResults = allServerResults.filter(r => r.results.length > 0)
     
-    resultsEl.innerHTML = results.map((group: any) => `
-      <div class="search-result-group" onclick="window.jumpToMessage('${group.targetId}'); document.getElementById('search-results').style.display='none'">
-        ${group.messages.map((m: any) => `
-          <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
-            <div class="search-result-header">
-              <span>@${m.handle}</span>
-              <span>${new Date(m.created_at).toLocaleString()}</span>
+    if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
+    
+    resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => {
+      const channel = server.channels.find((c: any) => c.id === group.channelId)
+      return `
+        <div class="search-result-group" onclick="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}'); document.getElementById('search-results').style.display='none'">
+          <div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>
+          ${group.messages.map((m: any) => `
+            <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
+              <div class="search-result-header">
+                <span>@${m.handle}</span>
+                <span>${new Date(m.created_at).toLocaleString()}</span>
+              </div>
+              <div class="search-result-content">${m.content}</div>
             </div>
-            <div class="search-result-content">${m.content}</div>
-          </div>
-        `).join('')}
-      </div>
-    `).join('')
+          `).join('')}
+        </div>
+      `
+    }).join('')).join('')
   } catch (e) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--red); font-size:12px;">Search failed</div>' }
 };
 

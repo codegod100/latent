@@ -118,20 +118,19 @@ export async function handleRequest(
     }
 
     if (url.pathname === '/api/search' && request.method === 'GET') {
-      const channelId = url.searchParams.get('channelId');
+      const channelId = url.searchParams.get('channelId'); // Optional
       const query = url.searchParams.get('q');
       if (!query) return new Response(JSON.stringify([]), { headers });
       
       const results = await storage.searchMessages(channelId, query, 10);
       
-      // For each result, fetch 2 messages before and 2 after for context
       const contextualResults = await Promise.all(results.map(async (m) => {
-        // Simple context: fetch messages with IDs slightly smaller and larger
-        // This is an approximation since ULIDs are chronological
-        const context = await storage.listMessages(channelId, m.id + 'zzzzzz', 5); // Fetch 5 including self
+        // Fetch context from the SPECIFIC channel this message belongs to
+        const context = await storage.listMessages(m.channel_id, m.id + 'zzzzzz', 5);
         return { 
           targetId: m.id,
-          messages: context.reverse() // Chronological order
+          channelId: m.channel_id,
+          messages: context.reverse()
         };
       }));
 
