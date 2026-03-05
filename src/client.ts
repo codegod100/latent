@@ -442,4 +442,11 @@ async function showApp(session: any) {
 (window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
 (window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
 
+const inputEl = document.getElementById('message-input');
+if (inputEl) {
+  inputEl.onkeydown = (e) => {
+    if (e.key === 'Enter') (window as any).submitMessage();
+  };
+}
+
 init()
