@@ -280,7 +280,13 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce); const headers: any = { 'Content-Type': 'application/json' };
     const s = serverSessions.get(server.url); if (s && new Date(s.expires) > new Date()) headers['Authorization'] = `Bearer ${s.token}`;
-    const res = await fetch(`${server.url}${endpoint}`, { method, headers, body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) });
+    
+    const fetchOpts: any = { method, headers };
+    if (method !== 'GET' && method !== 'HEAD') {
+      fetchOpts.body = JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did });
+    }
+
+    const res = await fetch(`${server.url}${endpoint}`, fetchOpts);
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce);
     return { ok: res.ok, status: res.status, data };
   };
