@@ -180,7 +180,11 @@ function renderMessages(shouldScrollBottom = true) {
       </div>
     `
   }).join('')
-  if (shouldScrollBottom) container.scrollTop = container.scrollHeight
+  if (shouldScrollBottom) {
+    container.scrollTop = container.scrollHeight
+    const jumpBtn = document.getElementById('jump-to-present');
+    if (jumpBtn) jumpBtn.style.display = 'none';
+  }
 }
 
 // --- SEARCH & NAVIGATION ---
@@ -192,6 +196,8 @@ function renderMessages(shouldScrollBottom = true) {
   if (resultsEl) resultsEl.style.display = 'none';
   if (clearBtn) clearBtn.style.display = 'none';
 };
+
+(window as any).jumpToPresent = () => { refreshMessages() };
 
 (window as any).jumpToMessage = async (id: string, serverHost?: string, channelId?: string) => {
   if (serverHost && serverHost !== currentServer?.host) {
@@ -399,9 +405,19 @@ if (msgList) {
     if (msgList.scrollTop < 10 && currentMessages.length > 0 && hasMoreMessages && !isLoadingOlder) {
       refreshMessages(currentMessages[currentMessages.length - 1].id);
     }
+    const jumpBtn = document.getElementById('jump-to-present');
+    if (jumpBtn) {
+      if (msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight > 500) { jumpBtn.style.display = 'block'; } 
+      else if (!hasMoreMessages) { jumpBtn.style.display = 'none'; } 
+      else { jumpBtn.style.display = 'none'; }
+    }
   };
 }
 
+// --- GLOBAL ATTACHMENTS ---
+(window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (container) { if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') } };
+(window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
+(window as any).logout = () => { localStorage.clear(); location.href = '/' };
 (window as any).startLogin = async () => {
   const btn = document.querySelector('#login-panel button') as HTMLButtonElement;
   const input = document.getElementById('handle') as HTMLInputElement;
@@ -418,6 +434,25 @@ if (msgList) {
     alert(`Login failed: ${err.message || 'Unknown error'}`);
   }
 };
+(window as any).selectServer = (host: string) => { const server = SERVERS.find(s => s.host === host); if (server) { currentServer = server; currentChannel = server.channels?.[0] || null; window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(true) } };
+(window as any).selectChannel = (id: string) => { const chan = currentServer.channels.find((c: any) => c.id === id); if (chan) { currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false) } };
+(window as any).enterEditMode = (id: string) => { const contentEl = document.getElementById(`msg-content-${id}`)!; const original = contentEl.textContent!; contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" /><div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button><button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`; document.getElementById(`edit-input-${id}`)?.focus() };
+(window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
+(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') (document.getElementById('server-urls-input') as HTMLTextAreaElement).value = SERVER_URLS.join('\n') };
+(window as any).saveClientSettingsDirect = async (newUrls: string[]) => {
+  const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
+  try {
+    const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const listRes = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
+    const existing = await listRes.json(); for (const record of (existing.records || [])) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey: record.uri.split('/').pop() }) }) }
+    for (const url of newUrls) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() } }) }) }
+  } catch (e) { log('PDS save failed', e) }
+};
+(window as any).saveClientSettings = async () => { setLoading('#client-settings-modal .admin-save-btn', true, 'Syncing...'); const input = (document.getElementById('server-urls-input') as HTMLTextAreaElement).value; const newUrls = input.split('\n').map(u => u.trim()).filter(Boolean); await (window as any).saveClientSettingsDirect(newUrls); location.href = '/' };
+(window as any).saveServerConfig = async () => { const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim(); setLoading('#admin-menu .admin-save-btn', true, 'Saving...'); const res = await serverMutation(currentServer, '/api/meta', { name }); setLoading('#admin-menu .admin-save-btn', false); if (res?.ok) { currentServer.name = name; const serverIdx = SERVERS.findIndex(s => s.id === currentServer.id); if (serverIdx !== -1) SERVERS[serverIdx].name = name; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' } };
+(window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
+(window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await serverMutation(currentServer, `/api/categories/${id}`, { method: 'DELETE' })).ok) location.reload() };
+(window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
+(window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
 
 const inputEl = document.getElementById('message-input');
 if (inputEl) { inputEl.onkeydown = (e) => { if (e.key === 'Enter') (window as any).submitMessage() }; }
@@ -427,18 +462,8 @@ if (handleInput) { handleInput.onkeydown = (e) => { if (e.key === 'Enter') (wind
 
 const sInput = document.getElementById('search-input');
 if (sInput) {
-  sInput.oninput = (e: any) => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => (window as any).performSearch(e.target.value), 300);
-  };
-  sInput.onblur = () => {
-    setTimeout(() => {
-      document.getElementById('search-results')!.style.display = 'none'
-      document.getElementById('clear-search')!.style.display = 'none'
-    }, 500); 
-  };
+  sInput.oninput = (e: any) => { clearTimeout(searchTimeout); searchTimeout = setTimeout(() => (window as any).performSearch(e.target.value), 300); };
+  sInput.onblur = () => { setTimeout(() => { document.getElementById('search-results')!.style.display = 'none'; document.getElementById('clear-search')!.style.display = 'none' }, 500); };
 }
-
-(window as any).clearSearchDirect = () => { window.clearSearch(); }
 
 init()

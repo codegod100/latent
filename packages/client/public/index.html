@@ -133,6 +133,9 @@
     .big-spinner { border: 4px solid var(--surface0); border-top: 4px solid var(--blue); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+    #jump-to-present { display: none; position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--blue); color: var(--crust); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; cursor: pointer; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: all 0.2s; }
+    #jump-to-present:hover { background: var(--lavender); transform: translateX(-50%) translateY(-2px); }
+
     @media (max-width: 768px) {
       #mobile-menu-btn { display: block; }
       #server-sidebar { position: absolute; left: 0; top: 0; bottom: 0; transform: translateX(-100%); z-index: 110; }
@@ -194,6 +197,7 @@
       </div>
 
       <div id="message-list"></div>
+      <div id="jump-to-present" onclick="window.jumpToPresent()">↓ Jump to Present</div>
       
       <div id="input-area">
         <div id="reply-bar">
