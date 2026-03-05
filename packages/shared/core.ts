@@ -35,12 +35,12 @@ export async function handleRequest(
       let serverId = await storage.getConfig('server_id');
       if (!serverId) { serverId = ulid(); await storage.setConfig('server_id', serverId); }
       
-      // Only update if changed or missing to save D1 writes
-      const currentName = await storage.getConfig('server_name');
-      if (currentName !== configSeed.defaultName) await storage.setConfig('server_name', configSeed.defaultName);
+      // Use DB value if present, otherwise seed from config
+      let serverName = await storage.getConfig('server_name');
+      if (!serverName) { serverName = configSeed.defaultName; await storage.setConfig('server_name', serverName); }
       
-      const currentAdmin = await storage.getConfig('admin_handle');
-      if (currentAdmin !== configSeed.adminHandle) await storage.setConfig('admin_handle', configSeed.adminHandle);
+      let adminHandle = await storage.getConfig('admin_handle');
+      if (!adminHandle) { adminHandle = configSeed.adminHandle; await storage.setConfig('admin_handle', adminHandle); }
 
       // Ensure default channel
       const channels = await storage.listChannels();
@@ -48,11 +48,13 @@ export async function handleRequest(
         await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
       }
 
-      cachedConfig = { serverId, serverName: configSeed.defaultName, adminHandle: configSeed.adminHandle };
+      cachedConfig = { serverId, serverName, adminHandle };
       isBootstrapped = true;
     }
 
-    const { serverId, serverName, adminHandle } = cachedConfig!;
+    const { serverId } = cachedConfig!;
+    const serverName = cachedConfig!.serverName;
+    const adminHandle = cachedConfig!.adminHandle;
 
     // 1. HELPERS
     const verifyIdentity = async (body: any) => {
@@ -208,7 +210,9 @@ export async function handleRequest(
 
       // ADMIN PROTECTED
       if (url.pathname === '/api/meta') {
-        await verifyAdmin(body); await storage.setConfig('server_name', body.name);
+        await verifyAdmin(body); 
+        await storage.setConfig('server_name', body.name);
+        if (cachedConfig) cachedConfig.serverName = body.name; // Invalidate cache
         return new Response(JSON.stringify({ ok: true }), { headers });
       }
       if (url.pathname === '/api/categories') {
