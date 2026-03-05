@@ -407,6 +407,7 @@ async function showApp(session: any) {
         document.getElementById('user-handle')!.textContent = `@${profile.handle}`;
         await syncServersFromPds(session);
         renderAdminUI();
+        
         const params = new URLSearchParams(window.location.search);
         const inviteCode = params.get('invite');
         if (inviteCode) {
@@ -494,16 +495,44 @@ function renderAll() {
     const chanEl = document.getElementById('current-channel-name'); if (chanEl) chanEl.textContent = currentChannel?.name || 'no-channel'
     refreshMessages(); renderAdminUI();
     const toggle = document.getElementById('invite-only-toggle') as HTMLInputElement;
+    const inviteSection = document.getElementById('invite-gen-section');
     if (toggle) toggle.checked = !!currentServer.inviteOnly;
+    if (inviteSection) inviteSection.style.display = currentServer.inviteOnly ? 'block' : 'none';
   }
 }
 
 function renderServerList() {
   const sidebar = document.getElementById('server-sidebar')!; sidebar.innerHTML = SERVERS.map(s => {
     const initial = (s.name && s.name[0]) || '?'; const statusClass = s.error ? 'offline' : ''; const activeClass = s.host === currentServer?.host ? 'active' : ''
-    return `<div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>`
+    return `<div class="server-icon-container">
+      <div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>
+      <div class="server-remove" onclick="event.stopPropagation();window.removeServer('${s.host}')">×</div>
+    </div>`
   }).join('') + `<div class="server-icon add-server" onclick="window.toggleClientSettings()" title="Settings">+</div>`
 }
+
+(window as any).removeServer = async (host: string) => {
+  if (confirm(`Disconnect from ${host}?`)) {
+    SERVER_URLS = SERVER_URLS.filter(u => new URL(u).host !== host);
+    if ((window as any).atprotoSession) await window.saveClientSettingsDirect(SERVER_URLS);
+    else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS));
+    location.reload();
+  }
+};
+
+(window as any).addServerAction = async () => {
+  const input = document.getElementById('new-server-url') as HTMLInputElement;
+  const url = input.value.trim();
+  if (!url) return;
+  try {
+    const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 5000 });
+    if (!res.ok) throw new Error('Server returned error');
+    SERVER_URLS.push(url);
+    if ((window as any).atprotoSession) await window.saveClientSettingsDirect(SERVER_URLS);
+    else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS));
+    location.reload();
+  } catch (e) { alert('Invalid server URL or server is offline.'); }
+};
 
 function renderChannelList() {
   const list = document.getElementById('channel-list')!; if (!currentServer || currentServer.error) { list.innerHTML = '<div style="padding:1rem; color:#f23f42;">Server Offline</div>'; return }
@@ -565,7 +594,7 @@ if (msgList) {
 (window as any).selectChannel = (id: string) => { const chan = currentServer.channels.find((c: any) => c.id === id); if (chan) { currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false) } };
 (window as any).enterEditMode = (id: string) => { const contentEl = document.getElementById(`msg-content-${id}`)!; const original = contentEl.textContent!; contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" /><div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button><button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`; document.getElementById(`edit-input-${id}`)?.focus() };
 (window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
-(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') (document.getElementById('server-urls-input') as HTMLTextAreaElement).value = SERVER_URLS.join('\n') };
+(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') (document.getElementById('new-server-url') as HTMLInputElement).focus() };
 (window as any).saveClientSettingsDirect = async (newUrls: string[]) => {
   const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
   try {
