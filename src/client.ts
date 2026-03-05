@@ -23,11 +23,13 @@ let isLoadingOlder = false
 let hasMoreMessages = true
 let searchTimeout: any = null
 
+const PROD_ORIGIN = window.location.origin
+
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
   clientMetadata: { 
-    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
-    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/'],
+    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : PROD_ORIGIN) + '/')}&scope=atproto%20transition:generic` : `${PROD_ORIGIN}/client-metadata.json`,
+    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : PROD_ORIGIN) + '/'],
     scope: 'atproto transition:generic',
     token_endpoint_auth_method: 'none'
   }
