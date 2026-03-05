@@ -8,9 +8,8 @@ export interface Notifier {
 const identityCache = new Map<string, { profile: any, expires: number }>();
 const CACHE_TTL = 5 * 60 * 1000;
 
-// Performance Cache: Avoid redundant DB hits on every request
 let isBootstrapped = false;
-let cachedConfig: { serverId: string, serverName: string, adminHandle: string } | null = null;
+let cachedConfig: { serverId: string, serverName: string, adminHandle: string, inviteOnly: boolean } | null = null;
 
 export async function handleRequest(
   request: Request, 
@@ -37,27 +36,27 @@ export async function handleRequest(
       if (!serverName) { serverName = configSeed.defaultName; await storage.setConfig('server_name', serverName); }
       let adminHandle = await storage.getConfig('admin_handle');
       if (!adminHandle) { adminHandle = configSeed.adminHandle; await storage.setConfig('admin_handle', adminHandle); }
+      let inviteOnly = (await storage.getConfig('invite_only')) === 'true';
       const channels = await storage.listChannels();
       if (channels.length === 0) await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
-      cachedConfig = { serverId, serverName, adminHandle };
+      cachedConfig = { serverId, serverName, adminHandle, inviteOnly };
       isBootstrapped = true;
     }
 
-    const { serverId, serverName, adminHandle } = cachedConfig!;
+    const { serverId, serverName, adminHandle, inviteOnly } = cachedConfig!;
 
     // 1. HELPERS
     const verifyIdentity = async (body: any) => {
       let result: { did: string, handle: string } | null = null;
       const authHeader = request.headers.get('Authorization');
-      
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
         const session = await storage.getSession(token);
         if (session) result = { did: session.did, handle: session.handle };
       }
-
       if (!result) {
         const { accessToken, dpopProof, pdsUrl, did } = body;
+        if (!accessToken) throw { status: 401, error: 'Authentication required' };
         const cacheKey = `${did}:${accessToken}`;
         const cached = identityCache.get(cacheKey);
         if (cached && cached.expires > Date.now()) {
@@ -72,9 +71,11 @@ export async function handleRequest(
           identityCache.set(cacheKey, { profile: result, expires: Date.now() + CACHE_TTL });
         }
       }
-
       if (result) {
         if (await storage.isBanned(result.did)) throw { status: 403, error: 'User is banned from this server' };
+        if (inviteOnly && result.handle !== adminHandle) {
+          if (!(await storage.isMember(result.did))) throw { status: 403, error: 'This server is invite-only', inviteOnly: true };
+        }
         return result;
       }
       throw { status: 401, error: 'Authentication required' };
@@ -99,7 +100,7 @@ export async function handleRequest(
 
     if (url.pathname === '/api/meta' && request.method === 'GET') {
       const [categories, chanList] = await Promise.all([storage.listCategories(), storage.listChannels()]);
-      return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList, features: { ws: !!notifier } }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+      return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, inviteOnly, categories, channels: chanList, features: { ws: !!notifier } }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
     if (url.pathname === '/api/messages' && request.method === 'GET') {
@@ -159,7 +160,22 @@ export async function handleRequest(
       return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
-    // --- MODERATION (BANS) ---
+    // --- JOIN (INVITES) ---
+    if (url.pathname === '/api/join' && request.method === 'POST') {
+      const body = await request.json() as any;
+      const { accessToken, dpopProof, pdsUrl, did, code } = body;
+      
+      // Verification logic (manual to bypass isMember check in verifyIdentity)
+      const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
+      const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
+      if (!pdsRes.ok) return new Response(JSON.stringify({ error: 'Identity verification failed' }), { status: 401, headers });
+      
+      const success = await storage.useInvite(code, did);
+      if (!success) return new Response(JSON.stringify({ error: 'Invalid or already used invite code' }), { status: 403, headers });
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
+
+    // --- MODERATION (BANS/INVITES) ---
     if (url.pathname === '/api/mod/bans') {
       if (request.method === 'GET') {
         const profile = await verifyIdentity({});
@@ -171,7 +187,7 @@ export async function handleRequest(
         const body = await (async () => { try { return await request.json() } catch(e) { return {} } })();
         await verifyAdmin(body);
         if (request.method === 'POST') {
-          await storage.addBan(body.did, body.handle, body.reason || '');
+          await storage.addBan(body.did, body.handle || null, body.reason || '');
           return new Response(JSON.stringify({ ok: true }), { headers });
         }
         if (request.method === 'DELETE') {
@@ -179,6 +195,14 @@ export async function handleRequest(
           return new Response(JSON.stringify({ ok: true }), { headers });
         }
       }
+    }
+
+    if (url.pathname === '/api/mod/invite' && request.method === 'POST') {
+      const body = await request.json() as any;
+      await verifyAdmin(body);
+      const code = 'INV-' + ulid();
+      await storage.createInvite(code);
+      return new Response(JSON.stringify({ ok: true, code }), { headers });
     }
 
     // --- WRITE OPERATIONS (Identity required) ---
@@ -233,8 +257,16 @@ export async function handleRequest(
 
       // ADMIN PROTECTED
       if (url.pathname === '/api/meta') {
-        await verifyAdmin(body); await storage.setConfig('server_name', body.name);
-        if (cachedConfig) cachedConfig.serverName = body.name;
+        await verifyAdmin(body);
+        if (body.name) {
+          await storage.setConfig('server_name', body.name);
+          if (cachedConfig) cachedConfig.serverName = body.name;
+        }
+        if (body.inviteOnly !== undefined) {
+          const val = String(body.inviteOnly);
+          await storage.setConfig('invite_only', val);
+          if (cachedConfig) cachedConfig.inviteOnly = body.inviteOnly;
+        }
         return new Response(JSON.stringify({ ok: true }), { headers });
       }
       if (url.pathname === '/api/categories') {

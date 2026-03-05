@@ -26,8 +26,8 @@ let searchTimeout: any = null
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
   clientMetadata: { 
-    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
-    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/'],
+    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
+    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/'],
     scope: 'atproto transition:generic',
     token_endpoint_auth_method: 'none'
   }
@@ -280,12 +280,10 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce); const headers: any = { 'Content-Type': 'application/json' };
     const s = serverSessions.get(server.url); if (s && new Date(s.expires) > new Date()) headers['Authorization'] = `Bearer ${s.token}`;
-    
     const fetchOpts: any = { method, headers };
     if (method !== 'GET' && method !== 'HEAD') {
       fetchOpts.body = JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did });
     }
-
     const res = await fetch(`${server.url}${endpoint}`, fetchOpts);
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce);
     return { ok: res.ok, status: res.status, data };
@@ -332,7 +330,7 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
     listEl.innerHTML = res.data.map((b: any) => `
       <div class="ban-item">
         <div class="ban-info">
-          <div class="ban-handle">@${b.handle}</div>
+          <div class="ban-handle">${b.handle ? '@' + b.handle : b.did}</div>
           <div class="ban-did">${b.did}</div>
         </div>
         <button class="unban-btn" onclick="window.unbanUser('${b.did}')">Unban</button>
@@ -352,9 +350,8 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
 
 (window as any).manualBan = async () => {
   const did = (document.getElementById('manual-ban-did') as HTMLInputElement).value.trim();
-  const handle = (document.getElementById('manual-ban-handle') as HTMLInputElement).value.trim();
-  if (!did || !handle) return alert('Enter DID and Handle');
-  const res = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual ban' });
+  if (!did) return alert('Enter the DID');
+  const res = await serverMutation(currentServer, '/api/mod/bans', { did, reason: 'Manual ban' });
   if (res?.ok) { alert('User banned'); window.refreshBanList(); }
   else alert('Failed to ban.');
 };
@@ -366,6 +363,22 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
   }
 };
 
+(window as any).generateInvite = async () => {
+  const res = await serverMutation(currentServer, '/api/mod/invite', {});
+  if (res?.ok && res.data.code) {
+    const url = new URL(window.location.origin);
+    url.pathname = `/${currentServer.host}`;
+    url.searchParams.set('invite', res.data.code);
+    const output = document.getElementById('invite-output')!;
+    output.style.display = 'block';
+    output.textContent = url.toString();
+  } else alert('Failed to generate invite');
+};
+
+(window as any).copyToClipboard = (text: string) => {
+  navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
+};
+
 // --- SYSTEM ---
 async function showApp(session: any) {
   (window as any).atprotoSession = session; currentUserDid = session.did;
@@ -373,7 +386,31 @@ async function showApp(session: any) {
     try {
       const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`;
       const res = await pdsFetch(session, probeUrl); const profile = await res.json();
-      if (profile.handle) { currentUserHandle = profile.handle; document.getElementById('user-handle')!.textContent = `@${profile.handle}`; await syncServersFromPds(session); renderAdminUI() }
+      if (profile.handle) {
+        currentUserHandle = profile.handle;
+        document.getElementById('user-handle')!.textContent = `@${profile.handle}`;
+        await syncServersFromPds(session);
+        renderAdminUI();
+        
+        // Handle Join Invite
+        const params = new URLSearchParams(window.location.search);
+        const inviteCode = params.get('invite');
+        if (inviteCode) {
+          log(`Attempting to join server with code: ${inviteCode}`);
+          const joinRes = await fetch(`${currentServer.url}/api/join`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: await getDpopProof(session, 'GET', probeUrl), pdsUrl, did: session.did, code: inviteCode })
+          });
+          if (joinRes.ok) {
+            alert(`Successfully joined ${currentServer.name}!`);
+            const cleanUrl = new URL(window.location.href); cleanUrl.searchParams.delete('invite');
+            window.history.replaceState({}, '', cleanUrl.toString());
+          } else {
+            const err = await joinRes.json();
+            alert(`Failed to join: ${err.error || 'Invalid code'}`);
+          }
+        }
+      }
     } catch (e) { log('Profile failed', e) }
   };
   await fetchProfile(); document.getElementById('loading-panel')!.style.display = 'none'; document.getElementById('app-container')!.style.display = 'flex'
@@ -437,7 +474,9 @@ function renderAll() {
   if (currentServer) {
     renderChannelList(); const nameEl = document.getElementById('current-server-name'); if (nameEl) nameEl.textContent = currentServer.name || 'Unknown'
     const chanEl = document.getElementById('current-channel-name'); if (chanEl) chanEl.textContent = currentChannel?.name || 'no-channel'
-    refreshMessages(); renderAdminUI()
+    refreshMessages(); renderAdminUI();
+    const toggle = document.getElementById('invite-only-toggle') as HTMLInputElement;
+    if (toggle) toggle.checked = !!currentServer.inviteOnly;
   }
 }
 
@@ -518,7 +557,14 @@ if (msgList) {
   } catch (e) { log('PDS save failed', e) }
 };
 (window as any).saveClientSettings = async () => { setLoading('#client-settings-modal .admin-save-btn', true, 'Syncing...'); const input = (document.getElementById('server-urls-input') as HTMLTextAreaElement).value; const newUrls = input.split('\n').map(u => u.trim()).filter(Boolean); await (window as any).saveClientSettingsDirect(newUrls); location.href = '/' };
-(window as any).saveServerConfig = async () => { const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim(); setLoading('#admin-menu .admin-save-btn', true, 'Saving...'); const res = await serverMutation(currentServer, '/api/meta', { name }); setLoading('#admin-menu .admin-save-btn', false); if (res?.ok) { currentServer.name = name; const serverIdx = SERVERS.findIndex(s => s.id === currentServer.id); if (serverIdx !== -1) SERVERS[serverIdx].name = name; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' } };
+(window as any).saveServerConfig = async () => { 
+  const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim(); 
+  const inviteOnly = (document.getElementById('invite-only-toggle') as HTMLInputElement).checked;
+  setLoading('#admin-menu .admin-save-btn', true, 'Saving...'); 
+  const res = await serverMutation(currentServer, '/api/meta', { name, inviteOnly }); 
+  setLoading('#admin-menu .admin-save-btn', false); 
+  if (res?.ok) { currentServer.name = name; currentServer.inviteOnly = inviteOnly; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' } 
+};
 (window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
 (window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await serverMutation(currentServer, `/api/categories/${id}`, { method: 'DELETE' })).ok) location.reload() };
 (window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
