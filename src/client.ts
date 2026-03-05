@@ -417,18 +417,23 @@ async function showApp(session: any) {
         const inviteCode = params.get('invite');
         if (inviteCode) {
           log(`Attempting to join server with code: ${inviteCode}`);
-          const joinRes = await fetch(`${currentServer.url}/api/join`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: await getDpopProof(session, 'GET', probeUrl), pdsUrl, did: session.did, code: inviteCode })
-          });
-          if (joinRes.ok) {
-            alert(`Successfully joined ${currentServer.name}!`);
-            const cleanUrl = new URL(window.location.href); cleanUrl.searchParams.delete('invite');
-            window.history.replaceState({}, '', cleanUrl.toString());
-          } else {
-            const err = await joinRes.json();
-            alert(`Failed to join: ${err.error || 'Invalid code'}`);
-          }
+          const submitJoin = async (nonce: string | null = null) => {
+            const dpop = await getDpopProof(session, 'GET', probeUrl, nonce);
+            const res = await fetch(`${currentServer.url}/api/join`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, code: inviteCode })
+            });
+            const data = await res.json();
+            if (data.isChallenge) return submitJoin(data.dpopNonce);
+            if (res.ok) {
+              alert(`Successfully joined ${currentServer.name}!`);
+              const cleanUrl = new URL(window.location.href); cleanUrl.searchParams.delete('invite');
+              window.history.replaceState({}, '', cleanUrl.toString());
+            } else {
+              alert(`Failed to join: ${data.error || 'Invalid code'}`);
+            }
+          };
+          await submitJoin();
         }
       }
     } catch (e) { log('Profile failed', e) }
