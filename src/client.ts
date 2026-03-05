@@ -31,6 +31,7 @@ const client = new BrowserOAuthClient({
   }
 })
 
+// --- UTILS ---
 const log = (m: string, obj?: any) => {
   let line = m
   if (obj instanceof Error) line = `${m}: ${obj.message}\n${obj.stack}`
@@ -40,6 +41,15 @@ const log = (m: string, obj?: any) => {
 
 const loadMsg = (msg: string) => {
   const el = document.getElementById('load-msg'); if (el) el.textContent = msg
+}
+
+function isAdmin() {
+  return currentUserHandle && currentServer?.adminHandle === currentUserHandle;
+}
+
+function renderAdminUI() {
+  const btn = document.getElementById('admin-tools');
+  if (btn) btn.style.display = isAdmin() ? 'block' : 'none';
 }
 
 function setLoading(selector: string, isLoading: boolean, text: string | null = null) {
@@ -130,26 +140,6 @@ async function pdsFetch(session: any, url: string, init: RequestInit = {}) {
     return res
   }
   return perform()
-}
-
-async function getAuthHeaders(server: any, pdsActionUrl: string) {
-  const session = (window as any).atprotoSession;
-  if (!session) return {};
-  
-  // Use session token if we have a valid one
-  const s = serverSessions.get(server.url);
-  if (s && new Date(s.expires) > new Date()) {
-    return { 'Authorization': `Bearer ${s.token}` };
-  }
-
-  // Fallback: DPoP + Exchange for new token
-  const tokens = await session.getTokenSet();
-  const proof = await getDpopProof(session, 'GET', pdsActionUrl);
-  return {
-    'X-Latent-DPoP': proof,
-    'X-Latent-Token': tokens.access_token,
-    'X-Latent-PDS': tokens.aud.replace(/\/+$/, '')
-  };
 }
 
 // This function exchanges ATProto credentials for a short-lived server session token
@@ -251,7 +241,6 @@ async function syncServersFromPds(session: any) {
     if (pdsUrls.length !== SERVER_URLS.length) await window.saveClientSettingsDirect(SERVER_URLS)
   } catch (e) { SERVER_URLS = DEFAULT_SERVER_URLS }
   await hydrateServers()
-  // Trigger background auth for all healthy servers
   for (const s of SERVERS) if (!s.error) authenticateWithServer(s);
 }
 
@@ -259,8 +248,8 @@ function renderAll() {
   renderServerList()
   if (currentServer) {
     renderChannelList()
-    document.getElementById('current-server-name')!.textContent = currentServer.name || 'Unknown'
-    document.getElementById('current-channel-name')!.textContent = currentChannel?.name || 'no-channel'
+    const nameEl = document.getElementById('current-server-name'); if (nameEl) nameEl.textContent = currentServer.name || 'Unknown'
+    const chanEl = document.getElementById('current-channel-name'); if (chanEl) chanEl.textContent = currentChannel?.name || 'no-channel'
     refreshMessages()
     renderAdminUI()
   }
@@ -317,8 +306,6 @@ function renderMessages() {
     const reactionCounts = (m.reactions || []).reduce((acc: any, r: any) => { acc[r.emoji] = (acc[r.emoji] || 0) + 1; return acc }, {});
     const myReactions = (m.reactions || []).filter((r: any) => r.did === currentUserDid).map((r: any) => r.emoji);
     const reactionHtml = Object.entries(reactionCounts).map(([emoji, count]) => `<div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" onclick="window.toggleReaction('${m.id}', '${emoji}')"><span>${emoji}</span><span class="reaction-count">${count}</span></div>`).join('');
-    
-    // REPLY CONTEXT
     const parentMsg = m.parent; 
 
     return `
@@ -354,17 +341,11 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce);
     const headers: any = { 'Content-Type': 'application/json' };
-    
-    // Use session token if available
     const s = serverSessions.get(server.url);
-    if (s && new Date(s.expires) > new Date()) {
-      headers['Authorization'] = `Bearer ${s.token}`;
-    }
+    if (s && new Date(s.expires) > new Date()) headers['Authorization'] = `Bearer ${s.token}`;
 
     const res = await fetch(`${server.url}${endpoint}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
+      method: 'POST', headers, body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
     });
     const data = await res.json();
     if (data.isChallenge) return submit(data.dpopNonce);
@@ -384,13 +365,9 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   const tempId = 'opt-' + Math.random().toString(36).substr(2, 9)
   const optMsg = { id: tempId, did: currentUserDid, handle: currentUserHandle, content, channel_id: currentChannel.id, parent_id: replyToMessage?.id || null, created_at: new Date().toISOString(), optimistic: true, reactions: [], parent: replyToMessage }
   currentMessages.unshift(optMsg); renderMessages(); (window as any).cancelReply(); input.value = '';
-  
   const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, clientId: tempId, parentId: optMsg.parent_id });
-  if (res?.ok && res.data.id) {
-    const optIdx = currentMessages.findIndex(m => m.id === tempId); if (optIdx !== -1) currentMessages[optIdx].id = res.data.id
-  } else {
-    currentMessages = currentMessages.filter(m => m.id !== tempId); renderMessages(); alert('Failed to send.');
-  }
+  if (res?.ok && res.data.id) { const optIdx = currentMessages.findIndex(m => m.id === tempId); if (optIdx !== -1) currentMessages[optIdx].id = res.data.id }
+  else { currentMessages = currentMessages.filter(m => m.id !== tempId); renderMessages(); alert('Failed to send.') }
 };
 
 (window as any).saveEdit = async (id: string) => {
@@ -415,7 +392,7 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   document.getElementById('reply-bar')!.style.display = 'flex'; document.getElementById('reply-text')!.textContent = `Replying to @${msg.handle}`; document.getElementById('message-input')!.focus()
 };
 (window as any).cancelReply = () => { replyToMessage = null; document.getElementById('app-container')!.classList.remove('is-replying'); document.getElementById('reply-bar')!.style.display = 'none' };
-(window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') };
+(window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (container) { if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') } };
 (window as any).selectServer = (host: string) => {
   const server = SERVERS.find(s => s.host === host); if (server) { currentServer = server; currentChannel = server.channels?.[0] || null; window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(true) }
 };
@@ -439,6 +416,7 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   } catch (e) { log('PDS save failed', e) }
 };
 (window as any).saveClientSettings = async () => { setLoading('#client-settings-modal .admin-save-btn', true, 'Syncing...'); const input = (document.getElementById('server-urls-input') as HTMLTextAreaElement).value; const newUrls = input.split('\n').map(u => u.trim()).filter(Boolean); await (window as any).saveClientSettingsDirect(newUrls); location.href = '/' };
+
 async function showApp(session: any) {
   (window as any).atprotoSession = session; currentUserDid = session.did
   const fetchProfile = async () => {
@@ -451,7 +429,12 @@ async function showApp(session: any) {
   }
   await fetchProfile(); document.getElementById('loading-panel')!.style.display = 'none'; document.getElementById('app-container')!.style.display = 'flex'
 }
-(window as any).startLogin = async () => { const handle = (document.getElementById('handle') as HTMLInputElement).value; if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname); await client.signIn(handle) };
+
+(window as any).startLogin = async () => {
+  const handle = (document.getElementById('handle') as HTMLInputElement).value
+  if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname)
+  await client.signIn(handle)
+};
 (window as any).logout = () => { localStorage.clear(); location.href = '/' };
 (window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
 (window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
