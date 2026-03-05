@@ -73,6 +73,14 @@
     .msg-date { color: var(--subtext0); font-size: 0.7rem; }
     .msg-content { color: var(--text); line-height: 1.375; }
 
+    /* Editing */
+    .edit-link { color: var(--blue); font-size: 10px; cursor: pointer; margin-left: 8px; opacity: 0.6; transition: opacity 0.2s; }
+    .edit-link:hover { opacity: 1; text-decoration: underline; }
+    .edit-input { width: 100%; padding: 8px; background: var(--surface0); border: 1px solid var(--blue); border-radius: 4px; color: var(--text); margin-top: 4px; box-sizing: border-box; }
+    .edit-actions { display: flex; gap: 8px; margin-top: 4px; font-size: 12px; }
+    .edit-save { color: var(--green); background: none; border: none; cursor: pointer; padding: 0; font-weight: bold; }
+    .edit-cancel { color: var(--red); background: none; border: none; cursor: pointer; padding: 0; }
+
     /* Modals / Menus */
     #admin-menu, #client-settings-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 500; }
     .modal-card { background: var(--mantle); width: 100%; max-width: 440px; border-radius: 8px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); border: 1px solid var(--surface0); }

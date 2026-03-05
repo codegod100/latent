@@ -774,6 +774,13 @@ var D1Storage = class {
   async addMessage(id, did, handle, content, channelId) {
     await this.db.prepare("INSERT INTO messages (id, did, handle, content, channel_id) VALUES (?, ?, ?, ?, ?)").bind(id, did, handle, content, channelId).run();
   }
+  async getMessage(id) {
+    return await this.db.prepare("SELECT * FROM messages WHERE id = ?").bind(id).first();
+  }
+  async updateMessage(id, did, content) {
+    const res = await this.db.prepare("UPDATE messages SET content = ? WHERE id = ? AND did = ?").bind(content, id, did).run();
+    return res.meta.changes > 0;
+  }
 };
 
 // ../../node_modules/ulid/dist/browser/index.js
@@ -1012,6 +1019,14 @@ async function handleRequest(request, storage, configSeed2) {
       const msgId = ulid();
       await storage.addMessage(msgId, did, profile.handle, content, channelId || null);
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
+    }
+    if (url.pathname === "/api/edit-message" && request.method === "POST") {
+      const body = await request.json();
+      const profile = await verifyIdentity(body);
+      const { id, content, did } = body;
+      const success = await storage.updateMessage(id, did, content);
+      if (!success) throw { status: 403, error: "Unauthorized or message not found" };
+      return new Response(JSON.stringify({ ok: true }), { headers });
     }
   } catch (err) {
     const status = err.status === 401 ? 200 : err.status || 500;

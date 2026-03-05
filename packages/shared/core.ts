@@ -150,14 +150,23 @@ export async function handleRequest(request: Request, storage: Storage, configSe
 
     if (url.pathname === '/api/submit-message' && request.method === 'POST') {
       const body = await request.json() as any;
-      // CRITICAL FIX: Only verify identity, NOT admin status for posting
       const profile = await verifyIdentity(body);
       const { did, content, channelId } = body;
-      
       const msgId = ulid();
       await storage.addMessage(msgId, did, profile.handle, content, channelId || null);
-      
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
+    }
+
+    if (url.pathname === '/api/edit-message' && request.method === 'POST') {
+      const body = await request.json() as any;
+      const profile = await verifyIdentity(body);
+      const { id, content, did } = body;
+      
+      // Authorization check happens in updateMessage (WHERE did = ?)
+      const success = await storage.updateMessage(id, did, content);
+      if (!success) throw { status: 403, error: 'Unauthorized or message not found' };
+      
+      return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
   } catch (err: any) {

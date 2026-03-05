@@ -9,6 +9,8 @@ export interface Storage {
   deleteChannel(id: string): Promise<void>;
   listMessages(channelId: string | null): Promise<any[]>;
   addMessage(id: string, did: string, handle: string, content: string, channelId: string | null): Promise<void>;
+  updateMessage(id: string, did: string, content: string): Promise<boolean>;
+  getMessage(id: string): Promise<any | null>;
 }
 
 // Implementation for Cloudflare D1
@@ -32,6 +34,13 @@ export class D1Storage implements Storage {
   }
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null) {
     await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id) VALUES (?, ?, ?, ?, ?)').bind(id, did, handle, content, channelId).run();
+  }
+  async getMessage(id: string) {
+    return await this.db.prepare('SELECT * FROM messages WHERE id = ?').bind(id).first();
+  }
+  async updateMessage(id: string, did: string, content: string) {
+    const res = await this.db.prepare('UPDATE messages SET content = ? WHERE id = ? AND did = ?').bind(content, id, did).run();
+    return res.meta.changes > 0;
   }
 }
 
@@ -67,5 +76,12 @@ export class SQLiteStorage implements Storage {
   }
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null) {
     this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id) VALUES (?, ?, ?, ?, ?)').run(id, did, handle, content, channelId);
+  }
+  async getMessage(id: string) {
+    return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id);
+  }
+  async updateMessage(id: string, did: string, content: string) {
+    const res = this.db.prepare('UPDATE messages SET content = ? WHERE id = ? AND did = ?').run(content, id, did);
+    return res.changes > 0;
   }
 }
