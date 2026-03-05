@@ -186,7 +186,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; input.focus(); }
+  if (input) { input.value = ''; }
   const resultsEl = document.getElementById('search-results');
   const clearBtn = document.getElementById('clear-search');
   if (resultsEl) resultsEl.style.display = 'none';
@@ -228,6 +228,7 @@ function renderMessages(shouldScrollBottom = true) {
   const resultsEl = document.getElementById('search-results')!
   const clearBtn = document.getElementById('clear-search')!
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
+  
   resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
   resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
   
@@ -238,18 +239,19 @@ function renderMessages(shouldScrollBottom = true) {
         const res = await fetch(`${server.url}/api/search?q=${encodeURIComponent(query)}`)
         if (!res.ok) return { server, results: [] }
         const results = await res.json()
-        return { server, results }
+        return { server, results: Array.isArray(results) ? results : [] }
       } catch (e) { return { server, results: [] } }
     })
 
     const allServerResults = await Promise.all(searchTasks)
-    const flatResults = allServerResults.filter(r => Array.isArray(r.results) && r.results.length > 0)
+    const flatResults = allServerResults.filter(r => r.results && r.results.length > 0)
+    
     if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
     
     resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => {
       const channel = (server.channels || []).find((c: any) => c.id === group.channelId)
       return `
-        <div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}')">
+        <div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}'); event.preventDefault();">
           <div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>
           ${(group.messages || []).map((m: any) => `
             <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
@@ -260,7 +262,10 @@ function renderMessages(shouldScrollBottom = true) {
         </div>
       `
     }).join('')).join('')
-  } catch (e) { log('Global search failed', e); resultsEl.innerHTML = '<div style="padding:10px; color:var(--red); font-size:12px;">Search failed</div>' }
+  } catch (e) { 
+    log('Global search failed', e); 
+    resultsEl.innerHTML = `<div style="padding:10px; color:var(--red); font-size:12px;">Search error: ${e.message || 'Unknown'}</div>` 
+  }
 };
 
 // --- ACTIONS ---
@@ -402,8 +407,10 @@ if (sInput) {
     setTimeout(() => {
       document.getElementById('search-results')!.style.display = 'none'
       document.getElementById('clear-search')!.style.display = 'none'
-    }, 400); // More time for mobile touch registration
+    }, 500); // Increased delay for mobile reliability
   };
 }
+
+(window as any).clearSearchDirect = () => { window.clearSearch(); }
 
 init()
