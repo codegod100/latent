@@ -28,7 +28,7 @@ export async function handleRequest(
   if (request.method === 'OPTIONS') return new Response(null, { headers });
 
   try {
-    // 0. OPTIMIZED BOOTSTRAP (Once per isolate lifecycle)
+    // 0. OPTIMIZED BOOTSTRAP
     if (!isBootstrapped) {
       await storage.ensureTables();
       let serverId = await storage.getConfig('server_id');
@@ -47,24 +47,37 @@ export async function handleRequest(
 
     // 1. HELPERS
     const verifyIdentity = async (body: any) => {
+      let result: { did: string, handle: string } | null = null;
       const authHeader = request.headers.get('Authorization');
+      
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
         const session = await storage.getSession(token);
-        if (session) return { did: session.did, handle: session.handle };
+        if (session) result = { did: session.did, handle: session.handle };
       }
-      const { accessToken, dpopProof, pdsUrl, did } = body;
-      const cacheKey = `${did}:${accessToken}`;
-      const cached = identityCache.get(cacheKey);
-      if (cached && cached.expires > Date.now()) return cached.profile;
-      const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-      const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
-      const dpopNonce = pdsRes.headers.get('dpop-nonce');
-      if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: 'Identity verification failed' };
-      const profile = await pdsRes.json() as any;
-      const result = { did: profile.did || did, handle: profile.handle };
-      identityCache.set(cacheKey, { profile: result, expires: Date.now() + CACHE_TTL });
-      return result;
+
+      if (!result) {
+        const { accessToken, dpopProof, pdsUrl, did } = body;
+        const cacheKey = `${did}:${accessToken}`;
+        const cached = identityCache.get(cacheKey);
+        if (cached && cached.expires > Date.now()) {
+          result = cached.profile;
+        } else {
+          const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
+          const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
+          const dpopNonce = pdsRes.headers.get('dpop-nonce');
+          if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: 'Identity verification failed' };
+          const profile = await pdsRes.json() as any;
+          result = { did: profile.did || did, handle: profile.handle };
+          identityCache.set(cacheKey, { profile: result, expires: Date.now() + CACHE_TTL });
+        }
+      }
+
+      if (result) {
+        if (await storage.isBanned(result.did)) throw { status: 403, error: 'User is banned from this server' };
+        return result;
+      }
+      throw { status: 401, error: 'Authentication required' };
     };
 
     const verifyAdmin = async (body: any) => {
@@ -98,7 +111,6 @@ export async function handleRequest(
       return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList, features: { ws: !!notifier } }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
-    // --- MESSAGES & SEARCH ---
     if (url.pathname === '/api/messages' && request.method === 'GET') {
       const channelId = url.searchParams.get('channelId');
       const beforeId = url.searchParams.get('before');
@@ -118,22 +130,14 @@ export async function handleRequest(
     }
 
     if (url.pathname === '/api/search' && request.method === 'GET') {
-      const channelId = url.searchParams.get('channelId'); // Optional
+      const channelId = url.searchParams.get('channelId');
       const query = url.searchParams.get('q');
       if (!query) return new Response(JSON.stringify([]), { headers });
-      
       const results = await storage.searchMessages(channelId, query, 10);
-      
       const contextualResults = await Promise.all(results.map(async (m) => {
-        // Fetch context from the SPECIFIC channel this message belongs to
         const context = await storage.listMessages(m.channel_id, m.id + 'zzzzzz', 5);
-        return { 
-          targetId: m.id,
-          channelId: m.channel_id,
-          messages: context.reverse()
-        };
+        return { targetId: m.id, channelId: m.channel_id, messages: context.reverse() };
       }));
-
       return new Response(JSON.stringify(contextualResults), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
@@ -141,8 +145,6 @@ export async function handleRequest(
       const channelId = url.searchParams.get('channelId');
       const targetId = url.searchParams.get('id');
       if (!targetId) return new Response(JSON.stringify([]), { headers });
-      // Fetch 50 messages starting from the target message (inclusive) downwards
-      // Since our listMessages is "beforeId", we fetch with id <= targetId
       const messages = await storage.listMessages(channelId, targetId + 'z', 50); 
       const messageIds = messages.map(m => m.id);
       const allReactions = await storage.listReactions(messageIds);
@@ -206,6 +208,22 @@ export async function handleRequest(
         return new Response(JSON.stringify({ ok: true }), { headers });
       }
 
+      // --- MODERATION ---
+      if (url.pathname === '/api/mod/bans') {
+        await verifyAdmin(body);
+        if (request.method === 'POST') {
+          await storage.addBan(body.did, body.handle, body.reason || '');
+          return new Response(JSON.stringify({ ok: true }), { headers });
+        }
+        if (request.method === 'DELETE') {
+          await storage.removeBan(body.did);
+          return new Response(JSON.stringify({ ok: true }), { headers });
+        }
+        const bans = await storage.listBans();
+        return new Response(JSON.stringify(bans), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+      }
+
+      // --- ADMIN ---
       if (url.pathname === '/api/meta') {
         await verifyAdmin(body); await storage.setConfig('server_name', body.name);
         if (cachedConfig) cachedConfig.serverName = body.name;

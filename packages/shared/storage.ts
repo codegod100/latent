@@ -17,6 +17,12 @@ export interface Storage {
   listReactions(messageIds: string[]): Promise<any[]>;
   searchMessages(channelId: string | null, query: string, limit?: number): Promise<any[]>;
   
+  // Moderation
+  addBan(did: string, handle: string, reason: string): Promise<void>;
+  removeBan(did: string): Promise<void>;
+  listBans(): Promise<any[]>;
+  isBanned(did: string): Promise<boolean>;
+
   // Session Management
   createSession(token: string, did: string, handle: string, expiresAt: string): Promise<void>;
   getSession(token: string): Promise<any | null>;
@@ -29,6 +35,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, parent_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE TABLE IF NOT EXISTS reactions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, did TEXT NOT NULL, handle TEXT NOT NULL, emoji TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(message_id, did, emoji))`,
   `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS bans (did TEXT PRIMARY KEY, handle TEXT NOT NULL, reason TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages(channel_id)`,
   `CREATE INDEX IF NOT EXISTS idx_messages_id_desc ON messages(id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions(message_id)`
@@ -96,6 +103,11 @@ export class D1Storage implements Storage {
     const placeholders = messageIds.map(() => '?').join(',');
     return (await this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).bind(...messageIds).all()).results;
   }
+
+  async addBan(did: string, handle: string, reason: string) { await this.db.prepare('INSERT OR REPLACE INTO bans (did, handle, reason) VALUES (?, ?, ?)').bind(did, handle, reason).run(); }
+  async removeBan(did: string) { await this.db.prepare('DELETE FROM bans WHERE did = ?').bind(did).run(); }
+  async listBans() { return (await this.db.prepare('SELECT * FROM bans ORDER BY created_at DESC').all()).results; }
+  async isBanned(did: string) { return !!(await this.db.prepare('SELECT did FROM bans WHERE did = ?').bind(did).first()); }
 
   async createSession(token: string, did: string, handle: string, expiresAt: string) {
     await this.db.prepare('INSERT INTO sessions (token, did, handle, expires_at) VALUES (?, ?, ?, ?)').bind(token, did, handle, expiresAt).run();
@@ -165,6 +177,11 @@ export class SQLiteStorage implements Storage {
     const placeholders = messageIds.map(() => '?').join(',');
     return this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).all(...messageIds);
   }
+
+  async addBan(did: string, handle: string, reason: string) { this.db.prepare('INSERT OR REPLACE INTO bans (did, handle, reason) VALUES (?, ?, ?)').run(did, handle, reason); }
+  async removeBan(did: string) { this.db.prepare('DELETE FROM bans WHERE did = ?').run(did); }
+  async listBans() { return this.db.prepare('SELECT * FROM bans ORDER BY created_at DESC').all(); }
+  async isBanned(did: string) { return !!this.db.prepare('SELECT did FROM bans WHERE did = ?').get(did); }
 
   async createSession(token: string, did: string, handle: string, expiresAt: string) {
     this.db.prepare('INSERT INTO sessions (token, did, handle, expires_at) VALUES (?, ?, ?, ?)').run(token, did, handle, expiresAt);

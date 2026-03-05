@@ -1,11 +1,18 @@
 {
-  "client_id": "https://latent.latha.org/client-metadata.json",
+  "client_id": "https://latent-nandi.netlify.app/client-metadata.json",
   "client_name": "Latent",
   "application_type": "web",
   "token_endpoint_auth_method": "none",
   "dpop_bound_access_tokens": true,
-  "grant_types": ["authorization_code", "refresh_token"],
-  "response_types": ["code"],
-  "redirect_uris": ["https://latent.latha.org/"],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "redirect_uris": [
+    "https://latent-nandi.netlify.app/"
+  ],
   "scope": "atproto transition:generic"
 }

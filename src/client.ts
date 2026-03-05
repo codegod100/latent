@@ -23,13 +23,11 @@ let isLoadingOlder = false
 let hasMoreMessages = true
 let searchTimeout: any = null
 
-const PROD_ORIGIN = window.location.origin
-
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
   clientMetadata: { 
-    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : PROD_ORIGIN) + '/')}&scope=atproto%20transition:generic` : `${PROD_ORIGIN}/client-metadata.json`,
-    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : PROD_ORIGIN) + '/'],
+    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
+    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/'],
     scope: 'atproto transition:generic',
     token_endpoint_auth_method: 'none'
   }
@@ -50,7 +48,10 @@ const loadMsg = (msg: string) => {
 function isAdmin() { return currentUserHandle && currentServer?.adminHandle === currentUserHandle }
 (window as any).isAdmin = isAdmin;
 
-function renderAdminUI() { const btn = document.getElementById('admin-tools'); if (btn) btn.style.display = isAdmin() ? 'block' : 'none' }
+function renderAdminUI() { 
+  const adminBtn = document.getElementById('admin-tools'); if (adminBtn) adminBtn.style.display = isAdmin() ? 'block' : 'none' 
+  const modBtn = document.getElementById('mod-tools'); if (modBtn) modBtn.style.display = isAdmin() ? 'block' : 'none'
+}
 (window as any).renderAdminUI = renderAdminUI;
 
 function setLoading(selector: string, isLoading: boolean, text: string | null = null) {
@@ -172,6 +173,7 @@ function renderMessages(shouldScrollBottom = true) {
           <div class="action-btn" onclick="window.toggleReaction('${m.id}', '👍')" title="Thumbs Up">👍</div>
           <div class="action-btn" onclick="window.toggleReaction('${m.id}', '❤️')" title="Love">❤️</div>
           ${m.did === currentUserDid ? `<div class="action-btn" onclick="window.enterEditMode('${m.id}')" title="Edit">✎</div>` : ''}
+          ${isAdmin() ? `<div class="action-btn ban" onclick="window.banUser('${m.did}', '${m.handle}')" title="Ban User">🚫</div>` : ''}
         </div>
         <div class="msg-header">
           <span class="msg-author">@${m.handle}</span>
@@ -192,7 +194,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; input.focus(); }
+  if (input) { input.value = ''; }
   const resultsEl = document.getElementById('search-results');
   const clearBtn = document.getElementById('clear-search');
   if (resultsEl) resultsEl.style.display = 'none';
@@ -272,15 +274,15 @@ function renderMessages(shouldScrollBottom = true) {
 };
 
 // --- ACTIONS ---
-async function serverMutation(server: any, endpoint: string, body: any) {
+async function serverMutation(server: any, endpoint: string, body: any, method: string = 'POST') {
   const session = (window as any).atprotoSession; if (!session) return;
   const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`;
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce); const headers: any = { 'Content-Type': 'application/json' };
     const s = serverSessions.get(server.url); if (s && new Date(s.expires) > new Date()) headers['Authorization'] = `Bearer ${s.token}`;
-    const res = await fetch(`${server.url}${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) });
+    const res = await fetch(`${server.url}${endpoint}`, { method, headers, body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) });
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce);
-    return { ok: res.ok, data };
+    return { ok: res.ok, status: res.status, data };
   };
   return await submit();
 }
@@ -295,7 +297,10 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   const input = document.getElementById('message-input') as HTMLInputElement; const content = input.value.trim(); if (!content) return
   const parentId = replyToMessage?.id || null; setLoading('#input-area', true); input.value = ''; (window as any).cancelReply();
   const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, parentId });
-  setLoading('#input-area', false); if (res?.ok && !currentServer.features?.ws) refreshMessages(); else if (!res?.ok) alert('Failed to send.');
+  setLoading('#input-area', false); 
+  if (res?.status === 403) alert('You are banned from this server.');
+  else if (res?.ok && !currentServer.features?.ws) refreshMessages(); 
+  else if (!res?.ok) alert('Failed to send.');
 };
 
 (window as any).saveEdit = async (id: string) => {
@@ -303,6 +308,56 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   setLoading(`#edit-save-${id}`, true, '...');
   const res = await serverMutation(currentServer, '/api/edit-message', { id, content });
   setLoading(`#edit-save-${id}`, false); if (res?.ok && !currentServer.features?.ws) refreshMessages();
+};
+
+// --- MODERATION ---
+(window as any).toggleModDashboard = async () => {
+  const modal = document.getElementById('mod-dashboard')!;
+  modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+  if (modal.style.display === 'flex') window.refreshBanList();
+};
+
+(window as any).refreshBanList = async () => {
+  const listEl = document.getElementById('ban-list')!;
+  listEl.innerHTML = 'Loading...';
+  const res = await serverMutation(currentServer, '/api/mod/bans', {}, 'GET');
+  if (res?.ok && Array.isArray(res.data)) {
+    if (res.data.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No active bans.</div>'; return; }
+    listEl.innerHTML = res.data.map((b: any) => `
+      <div class="ban-item">
+        <div class="ban-info">
+          <div class="ban-handle">@${b.handle}</div>
+          <div class="ban-did">${b.did}</div>
+        </div>
+        <button class="unban-btn" onclick="window.unbanUser('${b.did}')">Unban</button>
+      </div>
+    `).join('');
+  } else { listEl.innerHTML = 'Failed to load bans.'; }
+};
+
+(window as any).banUser = async (did: string, handle: string) => {
+  const reason = prompt(`Ban @${handle}? Enter reason:`);
+  if (reason !== null) {
+    const res = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason });
+    if (res?.ok) { alert(`Banned @${handle}`); if (document.getElementById('mod-dashboard')!.style.display === 'flex') window.refreshBanList(); }
+    else alert('Failed to ban user.');
+  }
+};
+
+(window as any).manualBan = async () => {
+  const did = (document.getElementById('manual-ban-did') as HTMLInputElement).value.trim();
+  const handle = (document.getElementById('manual-ban-handle') as HTMLInputElement).value.trim();
+  if (!did || !handle) return alert('Enter DID and Handle');
+  const res = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual ban' });
+  if (res?.ok) { alert('User banned'); window.refreshBanList(); }
+  else alert('Failed to ban.');
+};
+
+(window as any).unbanUser = async (did: string) => {
+  if (confirm('Unban this user?')) {
+    const res = await serverMutation(currentServer, '/api/mod/bans', { did }, 'DELETE');
+    if (res?.ok) window.refreshBanList(); else alert('Failed to unban.');
+  }
 };
 
 // --- SYSTEM ---

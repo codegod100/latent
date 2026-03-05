@@ -10,8 +10,8 @@
     "dev:server": "cd packages/server && npx wrangler dev --remote false",
     "dev:server-alt": "cd packages/server-alt && npx wrangler dev --remote false --port 8788",
     "dev:docker": "cd packages/server-docker && bun src/index.ts",
-    "deploy:client": "wrangler pages deploy packages/client/public",
-    "deploy:client-netlify": "bun run build && cp packages/client/public/bundle.js packages/client-netlify/public/ && node scripts/generate-metadata.js $NETLIFY_HOST packages/client-netlify/public/client-metadata.json && bun x netlify-cli deploy --dir=packages/client-netlify/public --prod",
+    "deploy:client": "bun x wrangler pages deploy packages/client/public",
+    "deploy:client-netlify": "bun run build && cp packages/client/public/bundle.js packages/client-netlify/public/ && node scripts/generate-metadata.cjs $NETLIFY_HOST packages/client-netlify/public/client-metadata.json && bun x netlify-cli deploy --dir=packages/client-netlify/public --prod",
     "deploy:server": "cd packages/server && bun x wrangler deploy",
     "deploy:server-alt": "cd packages/server-alt && npx wrangler deploy"
   },
