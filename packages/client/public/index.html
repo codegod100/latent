@@ -140,8 +140,10 @@
       #app-container.menu-open #server-sidebar, #app-container.menu-open #channel-sidebar { transform: translateX(0); }
       #app-container.menu-open #mobile-overlay { display: block; }
       #input-area { padding: 0 8px 12px 8px; }
-      #search-input { width: 80px; }
-      #search-input:focus { width: 140px; }
+      #chat-header { height: auto; flex-wrap: wrap; padding-bottom: 8px; }
+      #search-container { width: 100%; margin-top: 8px; order: 3; }
+      #search-input { width: 100% !important; }
+      #search-results { width: calc(100vw - 32px); right: -12px; }
     }
   </style>
 </head>

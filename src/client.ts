@@ -186,7 +186,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; input.focus() }
+  if (input) { input.value = ''; }
   document.getElementById('search-results')!.style.display = 'none'
   document.getElementById('clear-search')!.style.display = 'none'
 };
@@ -208,6 +208,7 @@ function renderMessages(shouldScrollBottom = true) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       el.classList.add('flash-highlight')
       setTimeout(() => el.classList.remove('flash-highlight'), 3000)
+      window.clearSearch(); // Clear box after jump
       return true
     }
     return false
@@ -233,8 +234,10 @@ function renderMessages(shouldScrollBottom = true) {
   resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
   
   try {
-    // Search across ALL servers in parallel
-    const searchTasks = SERVERS.filter(s => !s.error).map(async (server) => {
+    const healthyServers = SERVERS.filter(s => !s.error);
+    if (healthyServers.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No active servers.</div>'; return }
+
+    const searchTasks = healthyServers.map(async (server) => {
       try {
         const res = await fetch(`${server.url}/api/search?q=${encodeURIComponent(query)}`)
         const results = await res.json()
@@ -243,14 +246,14 @@ function renderMessages(shouldScrollBottom = true) {
     })
 
     const allServerResults = await Promise.all(searchTasks)
-    const flatResults = allServerResults.filter(r => r.results.length > 0)
+    const flatResults = allServerResults.filter(r => r.results && r.results.length > 0)
     
     if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
     
     resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => {
       const channel = server.channels.find((c: any) => c.id === group.channelId)
       return `
-        <div class="search-result-group" onclick="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}'); document.getElementById('search-results').style.display='none'">
+        <div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}')">
           <div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>
           ${group.messages.map((m: any) => `
             <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
@@ -406,11 +409,6 @@ async function showApp(session: any) { (window as any).atprotoSession = session;
 (window as any).startLogin = async () => { const handle = (document.getElementById('handle') as HTMLInputElement).value; if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname); await client.signIn(handle) };
 (window as any).logout = () => { localStorage.clear(); location.href = '/' };
 (window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
-(window as any).saveServerConfig = async () => { const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim(); setLoading('#admin-menu .admin-save-btn', true, 'Saving...'); const res = await serverMutation(currentServer, '/api/meta', { name }); setLoading('#admin-menu .admin-save-btn', false); if (res?.ok) { currentServer.name = name; const serverIdx = SERVERS.findIndex(s => s.id === currentServer.id); if (serverIdx !== -1) SERVERS[serverIdx].name = name; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' } };
-(window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
-(window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await serverMutation(currentServer, `/api/categories/${id}`, { method: 'DELETE' })).ok) location.reload() };
-(window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
-(window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
 
 const msgList = document.getElementById('message-list');
 if (msgList) {
@@ -429,6 +427,13 @@ if (sInput) {
   sInput.oninput = (e: any) => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => (window as any).performSearch(e.target.value), 300);
+  };
+  sInput.onblur = () => {
+    // Small delay to allow click on result
+    setTimeout(() => {
+      document.getElementById('search-results')!.style.display = 'none'
+      document.getElementById('clear-search')!.style.display = 'none'
+    }, 200);
   };
 }
 
