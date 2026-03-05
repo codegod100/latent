@@ -228,7 +228,6 @@ function renderMessages(shouldScrollBottom = true) {
   const resultsEl = document.getElementById('search-results')!
   const clearBtn = document.getElementById('clear-search')!
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
-  
   resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
   resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
   
@@ -245,7 +244,6 @@ function renderMessages(shouldScrollBottom = true) {
 
     const allServerResults = await Promise.all(searchTasks)
     const flatResults = allServerResults.filter(r => r.results && r.results.length > 0)
-    
     if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
     
     resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => {
@@ -394,8 +392,32 @@ if (msgList) {
   };
 }
 
+(window as any).startLogin = async () => {
+  const btn = document.querySelector('#login-panel button') as HTMLButtonElement;
+  const input = document.getElementById('handle') as HTMLInputElement;
+  const handle = input.value.trim();
+  if (!handle) return alert('Please enter your handle');
+  
+  log(`Starting login for ${handle}`);
+  setLoading('#login-panel button', true, 'Logging in...');
+  
+  try {
+    if (window.location.pathname !== '/') {
+      sessionStorage.setItem('latent_return_path', window.location.pathname);
+    }
+    await client.signIn(handle);
+  } catch (err: any) {
+    log('Login failed', err);
+    setLoading('#login-panel button', false);
+    alert(`Login failed: ${err.message || 'Unknown error'}`);
+  }
+};
+
 const inputEl = document.getElementById('message-input');
 if (inputEl) { inputEl.onkeydown = (e) => { if (e.key === 'Enter') (window as any).submitMessage() }; }
+
+const handleInput = document.getElementById('handle');
+if (handleInput) { handleInput.onkeydown = (e) => { if (e.key === 'Enter') (window as any).startLogin() }; }
 
 const sInput = document.getElementById('search-input');
 if (sInput) {
@@ -407,10 +429,8 @@ if (sInput) {
     setTimeout(() => {
       document.getElementById('search-results')!.style.display = 'none'
       document.getElementById('clear-search')!.style.display = 'none'
-    }, 500); // Increased delay for mobile reliability
+    }, 500); 
   };
 }
-
-(window as any).clearSearchDirect = () => { window.clearSearch(); }
 
 init()
