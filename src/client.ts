@@ -1,16 +1,19 @@
 import { BrowserOAuthClient } from '@atproto/oauth-client-browser'
 
 // --- CONFIG ---
-const PORT = 3010
-const APP_ORIGIN = `http://127.0.0.1:${PORT}`
-const REDIRECT_URI = `${APP_ORIGIN}/`
-const CLIENT_ID = `http://localhost/?redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=atproto%20transition:generic`
+const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+const HOSTNAME = window.location.hostname
+
+// If on Cloudflare, we use the real URL. If local, we use the port.
+const API_URL = IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev` 
+const CLIENT_URL = window.location.origin
+const CLIENT_ID = `${CLIENT_URL}/client-metadata.json`
 
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
   clientMetadata: {
     client_id: CLIENT_ID,
-    redirect_uris: [APP_ORIGIN + '/'],
+    redirect_uris: [CLIENT_URL + '/'],
     scope: 'atproto transition:generic',
     token_endpoint_auth_method: 'none',
   }
@@ -50,7 +53,7 @@ async function init() {
 
 async function refreshMessages() {
   try {
-    const res = await fetch('/api/messages')
+    const res = await fetch(`${API_URL}/api/messages`)
     const messages = await res.json()
     if (messages.length === 0) {
       listEl.innerHTML = '<em>No messages yet.</em>'
@@ -63,7 +66,7 @@ async function refreshMessages() {
       </div>
     `).join('')
   } catch (e) {
-    log('Failed to load messages', e)
+    log('Failed to load messages from Worker', e)
   }
 }
 
@@ -71,13 +74,11 @@ function showApp(session: any) {
   (window as any).atprotoSession = session
   document.getElementById('login-panel')!.style.display = 'none'
   document.getElementById('app-panel')!.style.display = 'block'
-  document.getElementById('user-handle')!.textContent = session.did // Placeholder until profile load
   
-  // Try to get handle for UI
   session.getTokenSet().then(async (tokens: any) => {
     const pdsUrl = tokens.aud.replace(/\/+$/, '')
     const res = await fetch(`${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`, {
-      headers: { 'Authorization': `Bearer ${tokens.access_token}` } // Simple bearer for UI info
+      headers: { 'Authorization': `Bearer ${tokens.access_token}` }
     })
     const profile = await res.json()
     if (profile.handle) document.getElementById('user-handle')!.textContent = `@${profile.handle}`
@@ -86,13 +87,18 @@ function showApp(session: any) {
   log('Session active for ' + session.did)
 }
 
-(window as any).startLogin = async () => {
+document.getElementById('login-btn')!.onclick = async () => {
   const handle = (document.getElementById('handle') as HTMLInputElement).value
   log('Starting login for ' + handle)
   await client.signIn(handle)
-};
+}
 
-(window as any).submitMessage = async () => {
+document.getElementById('logout-btn')!.onclick = () => {
+  localStorage.clear()
+  location.href = '/'
+}
+
+document.getElementById('submit-btn')!.onclick = async () => {
   const session = (window as any).atprotoSession
   if (!session) return alert('Not logged in')
 
@@ -102,7 +108,7 @@ function showApp(session: any) {
 
   const btn = document.getElementById('submit-btn') as HTMLButtonElement
   btn.disabled = true
-  log('Submitting identity-verified message...')
+  log('Submitting identity-verified message to Worker...')
 
   try {
     const tokens = await session.getTokenSet()
@@ -111,7 +117,6 @@ function showApp(session: any) {
     const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${did}`
 
     const submit = async (nonce: string | null = null) => {
-      // 1. Generate DPoP proof specifically for the verification URL
       const accessTokenBytes = new TextEncoder().encode(tokens.access_token)
       const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
       const ath = btoa(String.fromCharCode(...new Uint8Array(hashBuffer))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
@@ -132,8 +137,7 @@ function showApp(session: any) {
         }
       )
 
-      // 2. Send to our endpoint
-      const res = await fetch('/api/submit-message', {
+      const res = await fetch(`${API_URL}/api/submit-message`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ accessToken: tokens.access_token, dpopProof, pdsUrl, did, content })
@@ -142,16 +146,16 @@ function showApp(session: any) {
       const data = await res.json()
 
       if (!res.ok && data.dpopNonce) {
-        log('Challenge: Nonce received during submission, retrying...')
+        log('Challenge: Nonce received from Worker, retrying...')
         return submit(data.dpopNonce)
       }
 
       if (res.ok) {
-        log('Message stored successfully!', data)
+        log('Message stored in D1!', data)
         input.value = ''
         refreshMessages()
       } else {
-        log('Submission failed', data)
+        log('Worker submission failed', data)
       }
     }
 
@@ -162,8 +166,5 @@ function showApp(session: any) {
     btn.disabled = false
   }
 }
-
-// Wire up the button
-document.getElementById('submit-btn')!.onclick = (window as any).submitMessage
 
 init()
