@@ -66,6 +66,12 @@ async function fetchWithTimeout(resource: string, options: any = {}) {
 function setupWebSocket() {
   if (ws) { ws.close(); ws = null; }
   if (!currentServer || !currentChannel || currentServer.error) return;
+  
+  // Only connect if the server explicitly supports WebSockets
+  if (!currentServer.features?.ws) {
+    log(`Server ${currentServer.host} does not support WebSockets. Falling back to polling.`);
+    return;
+  }
 
   const protocol = currentServer.url.startsWith('https') ? 'wss' : 'ws';
   const wsUrl = `${currentServer.url.replace(/^https?/, protocol)}/api/ws?channelId=${currentChannel.id}`;
