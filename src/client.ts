@@ -4,10 +4,17 @@ import { BrowserOAuthClient } from '@atproto/oauth-client-browser'
 const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
 const HOSTNAME = window.location.hostname
 
-// If on Cloudflare, we use the real URL. If local, we use the port.
-const API_URL = IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev` 
+const SERVERS = [
+  { id: 'main', name: 'General Server', url: IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev` },
+  { id: 'alt', name: 'Alternate Reality', url: IS_LOCAL ? `http://${HOSTNAME}:8788` : `https://latent-server-alt.veronika-m-winters.workers.dev` }
+]
+
+let currentServer = SERVERS[0]
+
 const CLIENT_URL = window.location.origin
-const CLIENT_ID = `${CLIENT_URL}/client-metadata.json`
+const CLIENT_ID = IS_LOCAL 
+  ? `http://localhost/?redirect_uri=${encodeURIComponent(CLIENT_URL + '/')}&scope=atproto%20transition:generic`
+  : `${CLIENT_URL}/client-metadata.json`
 
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
@@ -41,74 +48,117 @@ async function init() {
       showApp(result.session)
     } else {
       log('No session found.')
-      document.getElementById('login-panel')!.style.display = 'block'
+      document.getElementById('login-panel')!.style.display = 'flex'
     }
+    renderServerList()
     refreshMessages()
   } catch (err) {
     log('Init failed', err)
     document.getElementById('loading-panel')!.style.display = 'none'
-    document.getElementById('login-panel')!.style.display = 'block'
+    document.getElementById('login-panel')!.style.display = 'flex'
+  }
+}
+
+function renderServerList() {
+  const sidebar = document.getElementById('server-sidebar')!
+  sidebar.innerHTML = SERVERS.map(s => `
+    <div class="server-icon ${s.id === currentServer.id ? 'active' : ''}" 
+         onclick="window.selectServer('${s.id}')" 
+         title="${s.name}">
+      ${s.name[0]}
+    </div>
+  `).join('')
+}
+
+(window as any).selectServer = (id: string) => {
+  const server = SERVERS.find(s => s.id === id)
+  if (server) {
+    currentServer = server
+    log(`Switched to server: ${server.name}`)
+    document.getElementById('current-server-name')!.textContent = server.name
+    renderServerList()
+    refreshMessages()
   }
 }
 
 async function refreshMessages() {
+  listEl.innerHTML = '<div style="padding:1rem;">Loading messages from ' + currentServer.name + '...</div>'
   try {
-    const res = await fetch(`${API_URL}/api/messages`)
+    const res = await fetch(`${currentServer.url}/api/messages`)
     const messages = await res.json()
     if (messages.length === 0) {
-      listEl.innerHTML = '<em>No messages yet.</em>'
+      listEl.innerHTML = '<div style="padding:1rem;"><em>No messages in this server yet.</em></div>'
       return
     }
     listEl.innerHTML = messages.map((m: any) => `
       <div class="msg-item">
-        <span class="msg-author">@${m.handle}</span>: ${m.content}
-        <div class="msg-date">${new Date(m.created_at).toLocaleString()}</div>
+        <div class="msg-header">
+          <span class="msg-author">@${m.handle}</span>
+          <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
+        </div>
+        <div class="msg-content">${m.content}</div>
       </div>
     `).join('')
+    listEl.scrollTop = listEl.scrollHeight
   } catch (e) {
-    log('Failed to load messages from Worker', e)
+    log(`Failed to load messages from ${currentServer.name}`, e)
+    listEl.innerHTML = '<div style="padding:1rem; color:red;">Failed to connect to server.</div>'
   }
 }
 
 function showApp(session: any) {
   (window as any).atprotoSession = session
   document.getElementById('login-panel')!.style.display = 'none'
-  document.getElementById('app-panel')!.style.display = 'block'
-  
+  document.getElementById('app-container')!.style.display = 'flex'
+  document.getElementById('current-server-name')!.textContent = currentServer.name
+  // Try to get handle for UI using proper DPoP
   session.getTokenSet().then(async (tokens: any) => {
-    const pdsUrl = tokens.aud.replace(/\/+$/, '')
-    const res = await fetch(`${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`, {
-      headers: { 'Authorization': `Bearer ${tokens.access_token}` }
-    })
-    const profile = await res.json()
-    if (profile.handle) document.getElementById('user-handle')!.textContent = `@${profile.handle}`
+    try {
+      const pdsUrl = tokens.aud.replace(/\/+$/, '')
+      const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
+
+      const dpop = await session.createDPoPProof({
+        method: 'GET',
+        url: probeUrl
+      })
+
+      const res = await fetch(probeUrl, {
+        headers: { 
+          'Authorization': `DPoP ${tokens.access_token}`,
+          'DPoP': dpop
+        }
+      })
+      const profile = await res.json()
+      if (profile.handle) document.getElementById('user-handle')!.textContent = `@${profile.handle}`
+    } catch (e) {
+      log('Failed to fetch profile for UI', e)
+    }
   })
 
   log('Session active for ' + session.did)
 }
 
-document.getElementById('login-btn')!.onclick = async () => {
+(window as any).startLogin = async () => {
   const handle = (document.getElementById('handle') as HTMLInputElement).value
   log('Starting login for ' + handle)
   await client.signIn(handle)
-}
+};
 
-document.getElementById('logout-btn')!.onclick = () => {
+(window as any).logout = () => {
   localStorage.clear()
   location.href = '/'
-}
+};
 
-document.getElementById('submit-btn')!.onclick = async () => {
+(window as any).submitMessage = async () => {
   const session = (window as any).atprotoSession
   if (!session) return alert('Not logged in')
 
   const input = document.getElementById('message-input') as HTMLInputElement
   const content = input.value.trim()
-  if (!content) return alert('Type something first')
+  if (!content) return
 
-  const btn = document.getElementById('submit-btn') as HTMLButtonElement
-  btn.disabled = true
-  log('Submitting identity-verified message to Worker...')
+  input.value = ''
+  log(`Submitting message to ${currentServer.name}...`)
 
   try {
     const tokens = await session.getTokenSet()
@@ -121,7 +171,7 @@ document.getElementById('submit-btn')!.onclick = async () => {
       const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
       const ath = btoa(String.fromCharCode(...new Uint8Array(hashBuffer))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 
-      const key = session.server.dpopKey
+      const key = (session as any).server.dpopKey
       const alg = key.algorithms.find((a: string) => a.startsWith('ES') || a.startsWith('RS')) || 'ES256'
       const pub = key.bareJwk
       
@@ -137,7 +187,7 @@ document.getElementById('submit-btn')!.onclick = async () => {
         }
       )
 
-      const res = await fetch(`${API_URL}/api/submit-message`, {
+      const res = await fetch(`${currentServer.url}/api/submit-message`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ accessToken: tokens.access_token, dpopProof, pdsUrl, did, content })
@@ -145,26 +195,29 @@ document.getElementById('submit-btn')!.onclick = async () => {
 
       const data = await res.json()
 
-      if (!res.ok && data.dpopNonce) {
-        log('Challenge: Nonce received from Worker, retrying...')
+      // Handle the "Soft Challenge" (Status was 200, but it's a nonce request)
+      if (data.isChallenge && data.dpopNonce) {
+        log('Nonce challenge received (handled silently)...')
         return submit(data.dpopNonce)
       }
 
-      if (res.ok) {
-        log('Message stored in D1!', data)
-        input.value = ''
+      if (res.ok && data.ok) {
+        log('Message stored in ' + currentServer.name)
         refreshMessages()
       } else {
-        log('Worker submission failed', data)
+        log('Submission failed', data)
       }
     }
 
     await submit()
   } catch (err) {
     log('Submission error', err)
-  } finally {
-    btn.disabled = false
   }
+}
+
+// Wire up Enter key
+document.getElementById('message-input')!.onkeydown = (e) => {
+  if (e.key === 'Enter') (window as any).submitMessage()
 }
 
 init()

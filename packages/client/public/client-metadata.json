@@ -1,10 +1,11 @@
 {
+  "client_id": "https://latent-e17.pages.dev/client-metadata.json",
   "client_name": "Isolated ATProto Client",
   "application_type": "web",
   "token_endpoint_auth_method": "none",
   "dpop_bound_access_tokens": true,
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
-  "redirect_uris": ["http://localhost:3010/"],
+  "redirect_uris": ["https://latent-e17.pages.dev/"],
   "scope": "atproto transition:generic"
 }

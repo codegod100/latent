@@ -5,9 +5,13 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx src/index.ts",
-    "start": "node --enable-source-maps dist/index.js",
-    "build": "tsc -p tsconfig.json"
+    "build": "bun build ./src/client.ts --outfile=packages/client/public/bundle.js --minify --target=browser",
+    "dev:client": "npx wrangler pages dev packages/client/public --port 3010",
+    "dev:server": "cd packages/server && npx wrangler dev",
+    "dev:server-alt": "cd packages/server-alt && npx wrangler dev --port 8788",
+    "deploy:client": "npx wrangler pages deploy packages/client/public",
+    "deploy:server": "cd packages/server && npx wrangler deploy",
+    "deploy:server-alt": "cd packages/server-alt && npx wrangler deploy"
   },
   "keywords": [],
   "author": "",
