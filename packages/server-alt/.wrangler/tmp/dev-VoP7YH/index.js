@@ -971,8 +971,9 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const dpopNonce = pdsRes.headers.get("dpop-nonce");
       if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: "Identity verification failed" };
       const profile = await pdsRes.json();
-      identityCache.set(cacheKey, { profile, expires: Date.now() + CACHE_TTL });
-      return profile;
+      const result = { did: profile.did || did, handle: profile.handle };
+      identityCache.set(cacheKey, { profile: result, expires: Date.now() + CACHE_TTL });
+      return result;
     }, "verifyIdentity");
     const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
       const profile = await verifyIdentity(body);
@@ -989,6 +990,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
           <style>
             body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
             h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
+            strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
           </style>
@@ -999,7 +1001,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (Auth Token Enabled)</strong></p>
+          <p>Status: <strong>Active</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
@@ -1014,7 +1016,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const profile = await verifyIdentity(body);
       const token = ulid();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1e3).toISOString();
-      await storage.createSession(token, body.did, profile.handle, expiresAt);
+      await storage.createSession(token, profile.did, profile.handle, expiresAt);
       return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" } });
     }
     if (url.pathname === "/api/meta") {
@@ -1078,10 +1080,10 @@ async function handleRequest(request, storage, configSeed2, notifier) {
     if (url.pathname === "/api/submit-message" && request.method === "POST") {
       const body = await request.json();
       const profile = await verifyIdentity(body);
-      const { did, content, channelId, clientId, parentId } = body;
+      const { content, channelId, clientId, parentId } = body;
       const msgId = ulid();
       const parent = parentId ? await storage.getMessage(parentId) : null;
-      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: (/* @__PURE__ */ new Date()).toISOString(), clientId, reactions: [], parent };
+      const msg = { id: msgId, did: profile.did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: (/* @__PURE__ */ new Date()).toISOString(), clientId, reactions: [], parent };
       await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id, msg.parent_id);
       if (notifier) await notifier.broadcast(msg.channel_id, { type: "new_message", message: msg });
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
@@ -1089,20 +1091,19 @@ async function handleRequest(request, storage, configSeed2, notifier) {
     if (url.pathname === "/api/edit-message" && request.method === "POST") {
       const body = await request.json();
       const profile = await verifyIdentity(body);
-      const { id, content, did } = body;
-      const success = await storage.updateMessage(id, did, content);
+      const { id, content } = body;
+      const success = await storage.updateMessage(id, profile.did, content);
       if (!success) throw { status: 403, error: "Unauthorized" };
       const msg = await storage.getMessage(id);
       const allReactions = await storage.listReactions([id]);
-      const msgWithReactions = { ...msg, reactions: allReactions };
-      if (notifier) await notifier.broadcast(msg.channel_id, { type: "edit_message", message: msgWithReactions });
+      if (notifier) await notifier.broadcast(msg.channel_id, { type: "edit_message", message: { ...msg, reactions: allReactions } });
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
     if (url.pathname === "/api/react" && request.method === "POST") {
       const body = await request.json();
       const profile = await verifyIdentity(body);
-      const { messageId, emoji, did } = body;
-      await storage.addReaction(messageId, did, profile.handle, emoji);
+      const { messageId, emoji } = body;
+      await storage.addReaction(messageId, profile.did, profile.handle, emoji);
       const msg = await storage.getMessage(messageId);
       if (notifier && msg) {
         const reactions = await storage.listReactions([messageId]);
@@ -1113,8 +1114,8 @@ async function handleRequest(request, storage, configSeed2, notifier) {
     if (url.pathname === "/api/unreact" && request.method === "POST") {
       const body = await request.json();
       const profile = await verifyIdentity(body);
-      const { messageId, emoji, did } = body;
-      await storage.removeReaction(messageId, did, emoji);
+      const { messageId, emoji } = body;
+      await storage.removeReaction(messageId, profile.did, emoji);
       const msg = await storage.getMessage(messageId);
       if (notifier && msg) {
         const reactions = await storage.listReactions([messageId]);
