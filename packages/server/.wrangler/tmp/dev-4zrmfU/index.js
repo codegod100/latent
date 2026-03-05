@@ -904,20 +904,25 @@ async function handleRequest(request, storage, configSeed2) {
   if (channels.length === 0) {
     await storage.addChannel(ulid(), null, "general", "General discussion", 0);
   }
-  const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
+  const verifyIdentity = /* @__PURE__ */ __name(async (body) => {
     const { accessToken, dpopProof, pdsUrl, did } = body;
     const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-    const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
+    const pdsRes = await fetch(probeUrl, {
+      headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof }
+    });
     const dpopNonce = pdsRes.headers.get("dpop-nonce");
     if (!pdsRes.ok) {
       throw {
         status: pdsRes.status,
         isChallenge: pdsRes.status === 401 && !!dpopNonce,
         dpopNonce,
-        error: "Verification failed"
+        error: "Identity verification failed"
       };
     }
-    const profile = await pdsRes.json();
+    return await pdsRes.json();
+  }, "verifyIdentity");
+  const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
+    const profile = await verifyIdentity(body);
     if (profile.handle !== adminHandle) {
       throw { status: 403, error: "Admin only" };
     }
@@ -1002,17 +1007,10 @@ async function handleRequest(request, storage, configSeed2) {
     }
     if (url.pathname === "/api/submit-message" && request.method === "POST") {
       const body = await request.json();
-      await verifyAdmin(body);
+      const profile = await verifyIdentity(body);
       const { did, content, channelId } = body;
       const msgId = ulid();
-      const profile = await storage.getConfig(`handle:${did}`) || body.did;
-      const pdsUrl = body.pdsUrl;
-      const accessToken = body.accessToken;
-      const dpopProof = body.dpopProof;
-      const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-      const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
-      const profileData = await pdsRes.json();
-      await storage.addMessage(msgId, did, profileData.handle, content, channelId || null);
+      await storage.addMessage(msgId, did, profile.handle, content, channelId || null);
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
   } catch (err) {

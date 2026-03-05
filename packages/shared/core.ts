@@ -32,24 +32,30 @@ export async function handleRequest(request: Request, storage: Storage, configSe
     await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
   }
 
-  // 3. ADMIN VERIFIER
-  const verifyAdmin = async (body: any) => {
+  // 3. IDENTITY NOTARY (Verifies DID + Handle via PDS)
+  const verifyIdentity = async (body: any) => {
     const { accessToken, dpopProof, pdsUrl, did } = body;
     const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-    const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
+    
+    const pdsRes = await fetch(probeUrl, { 
+      headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } 
+    });
     const dpopNonce = pdsRes.headers.get('dpop-nonce');
     
     if (!pdsRes.ok) {
-      // Return a structured error that the frontend knows how to retry
       throw { 
         status: pdsRes.status, 
         isChallenge: pdsRes.status === 401 && !!dpopNonce,
         dpopNonce, 
-        error: 'Verification failed' 
+        error: 'Identity verification failed' 
       };
     }
     
-    const profile = await pdsRes.json() as any;
+    return await pdsRes.json() as any;
+  };
+
+  const verifyAdmin = async (body: any) => {
+    const profile = await verifyIdentity(body);
     if (profile.handle !== adminHandle) {
       throw { status: 403, error: 'Admin only' };
     }
@@ -144,29 +150,17 @@ export async function handleRequest(request: Request, storage: Storage, configSe
 
     if (url.pathname === '/api/submit-message' && request.method === 'POST') {
       const body = await request.json() as any;
-      await verifyAdmin(body); // Use the same helper
+      // CRITICAL FIX: Only verify identity, NOT admin status for posting
+      const profile = await verifyIdentity(body);
       const { did, content, channelId } = body;
       
       const msgId = ulid();
-      const profile = await storage.getConfig(`handle:${did}`) || body.did; // Fallback or we could fetch again, but verifyAdmin already did.
-      // Actually verifyAdmin returns the profile, but we don't capture it here.
-      // Let's just re-verify or trust the token. 
-      // For now, we'll keep it simple.
+      await storage.addMessage(msgId, did, profile.handle, content, channelId || null);
       
-      // Let's refactor to capture profile in verifyAdmin if needed, or just re-run.
-      const pdsUrl = body.pdsUrl;
-      const accessToken = body.accessToken;
-      const dpopProof = body.dpopProof;
-      const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-      const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
-      const profileData = await pdsRes.json() as any;
-
-      await storage.addMessage(msgId, did, profileData.handle, content, channelId || null);
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
 
   } catch (err: any) {
-    // Standardized error response for all handlers
     const status = err.status === 401 ? 200 : (err.status || 500);
     return new Response(JSON.stringify(err), { status, headers });
   }
