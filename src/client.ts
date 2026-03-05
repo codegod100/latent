@@ -5,9 +5,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
 const HOSTNAME = IS_LOCAL ? '127.0.0.1' : window.location.hostname
 
 const DEFAULT_SERVER_URLS = [
-  IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev`,
-  IS_LOCAL ? `http://${HOSTNAME}:8788` : `https://latent-server-alt.veronika-m-winters.workers.dev`,
-  `https://latent-docker-backend.fly.dev`
+  IS_LOCAL ? `http://${HOSTNAME}:8789` : `https://latent-docker-backend.fly.dev`
 ]
 
 let SERVER_URLS: string[] = []
