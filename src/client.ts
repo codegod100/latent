@@ -478,6 +478,13 @@ if (msgList) {
 }
 
 // --- GLOBAL ATTACHMENTS ---
+(window as any).cancelReply = () => { 
+  replyToMessage = null; 
+  const container = document.getElementById('app-container');
+  if (container) container.classList.remove('is-replying'); 
+  const bar = document.getElementById('reply-bar');
+  if (bar) bar.style.display = 'none'; 
+};
 (window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (container) { if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') } };
 (window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
 (window as any).logout = () => { localStorage.clear(); location.href = '/' };
