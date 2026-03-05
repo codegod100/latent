@@ -32,14 +32,19 @@ async function init() {
   log('Initializing official library...')
   try {
     const result = await client.init()
+    document.getElementById('loading-panel')!.style.display = 'none'
+    
     if (result?.session) {
       showApp(result.session)
     } else {
       log('No session found.')
+      document.getElementById('login-panel')!.style.display = 'block'
     }
     refreshMessages()
   } catch (err) {
     log('Init failed', err)
+    document.getElementById('loading-panel')!.style.display = 'none'
+    document.getElementById('login-panel')!.style.display = 'block'
   }
 }
 

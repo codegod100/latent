@@ -118,7 +118,12 @@ app.get('/', (req, res) => {
   <h1>ATProto Verified Storage</h1>
   <p>Messages are stored in a local SQLite database ONLY after your identity is verified via DPoP.</p>
 
-  <div id="login-panel" class="panel">
+  <div id="loading-panel" class="panel" style="text-align: center; padding: 2rem;">
+    <div class="spinner"></div>
+    <p>Checking session...</p>
+  </div>
+
+  <div id="login-panel" class="panel" style="display:none">
     <label style="display:block; font-weight:bold; margin-bottom:0.5rem;">Handle</label>
     <div style="display:flex; gap:0.5rem;">
       <input id="handle" value="nandi.latha.org" placeholder="handle.bsky.social">
@@ -145,6 +150,23 @@ app.get('/', (req, res) => {
   <h3>System Log</h3>
   <pre id="console">Loading bundle...</pre>
 
+  <style>
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #007bff;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
   <script src="/public/bundle.js"></script>
 </body>
 </html>
