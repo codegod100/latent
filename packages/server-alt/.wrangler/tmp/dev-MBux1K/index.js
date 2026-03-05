@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// .wrangler/tmp/bundle-4AML56/checked-fetch.js
+// .wrangler/tmp/bundle-fR9cyg/checked-fetch.js
 var urls = /* @__PURE__ */ new Set();
 function checkURL(request, init) {
   const url = request instanceof URL ? request : new URL(
@@ -1061,13 +1061,81 @@ async function handleRequest(request, storage, configSeed2, notifier) {
 }
 __name(handleRequest, "handleRequest");
 
+// ../shared/notifier-do.ts
+var NotifierDO = class {
+  constructor(state) {
+    this.state = state;
+    this.sessions = new Set(this.state.getWebSockets());
+  }
+  static {
+    __name(this, "NotifierDO");
+  }
+  sessions = /* @__PURE__ */ new Set();
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/ws") {
+      if (request.headers.get("Upgrade") !== "websocket") {
+        return new Response("Expected Upgrade: websocket", { status: 426 });
+      }
+      const channelId = url.searchParams.get("channelId") || "global";
+      const [client, server] = new WebSocketPair();
+      this.state.acceptWebSocket(server, [channelId]);
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    if (url.pathname === "/broadcast" && request.method === "POST") {
+      const { channelId, data } = await request.json();
+      const topic = channelId || "global";
+      this.state.getWebSockets(topic).forEach((ws) => {
+        try {
+          ws.send(JSON.stringify(data));
+        } catch (e) {
+        }
+      });
+      return new Response("ok");
+    }
+    return new Response("Not Found", { status: 404 });
+  }
+  // WebSocket event handlers (using hibernation API for efficiency)
+  async webSocketMessage(ws, message) {
+  }
+  async webSocketClose(ws, code, reason, wasClean) {
+    ws.close(code, reason);
+  }
+  async webSocketError(ws, error) {
+    ws.close();
+  }
+};
+var WorkerNotifier = class {
+  constructor(doNamespace) {
+    this.doNamespace = doNamespace;
+  }
+  static {
+    __name(this, "WorkerNotifier");
+  }
+  broadcast(channelId, data) {
+    const id = this.doNamespace.idFromName("global-notifier");
+    const stub = this.doNamespace.get(id);
+    stub.fetch("http://do/broadcast", {
+      method: "POST",
+      body: JSON.stringify({ channelId, data })
+    }).catch((e) => console.error("DO Broadcast failed", e));
+  }
+};
+
 // src/index.ts
 import tomlString from "./f04b2c01401a29445662bc3da0bbbc1cd13e934b-server-config.toml";
 var configSeed = parse(tomlString);
 var src_default = {
   async fetch(request, env) {
+    const url = new URL(request.url);
     const storage = new D1Storage(env.DB);
-    return handleRequest(request, storage, configSeed);
+    const notifier = new WorkerNotifier(env.NOTIFIER);
+    if (url.pathname === "/api/ws") {
+      const id = env.NOTIFIER.idFromName("global-notifier");
+      const stub = env.NOTIFIER.get(id);
+      return stub.fetch(request);
+    }
+    return handleRequest(request, storage, configSeed, notifier);
   }
 };
 
@@ -1112,7 +1180,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-4AML56/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-fR9cyg/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -1144,7 +1212,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-4AML56/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-fR9cyg/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
@@ -1241,6 +1309,7 @@ if (typeof middleware_insertion_facade_default === "object") {
 }
 var middleware_loader_entry_default = WRAPPED_ENTRY;
 export {
+  NotifierDO,
   __INTERNAL_WRANGLER_MIDDLEWARE__,
   middleware_loader_entry_default as default
 };

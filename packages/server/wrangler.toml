@@ -1,15 +1,20 @@
 name = "latent-server"
 main = "src/index.ts"
-compatibility_date = "2024-03-04"
-account_id = "2612967e82750619224e7446c4c41b0b"
-
-[[rules]]
-type = "Text"
-globs = ["**/*.toml"]
-fallthrough = true
+compatibility_date = "2024-04-03"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "latent-db"
 database_id = "de7cb840-101e-42ac-bff9-c2fe7108c66b"
 
+[[durable_objects.bindings]]
+name = "NOTIFIER"
+class_name = "NotifierDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NotifierDO"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.toml"]
