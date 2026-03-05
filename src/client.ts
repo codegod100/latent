@@ -204,7 +204,9 @@ function renderServerList() {
   const sidebar = document.getElementById('server-sidebar')!
   sidebar.innerHTML = SERVERS.map(s => {
     const initial = (s.name && s.name[0]) || '?'
-    return `<div class="server-icon ${s.host === currentServer?.host ? 'active' : ''}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>`
+    const statusClass = s.error ? 'offline' : ''
+    const activeClass = s.host === currentServer?.host ? 'active' : ''
+    return `<div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>`
   }).join('') + `<div class="server-icon add-server" onclick="window.toggleClientSettings()" title="Settings">+</div>`
 }
 

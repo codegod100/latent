@@ -47,6 +47,8 @@
     .server-icon:hover, .server-icon.active { border-radius: 16px; background: var(--blue); color: var(--crust); }
     .server-icon.active::before { content: ""; position: absolute; left: -12px; height: 40px; width: 4px; background: var(--text); border-radius: 0 4px 4px 0; }
     .server-icon.add-server { color: var(--green); }
+    .server-icon.offline { opacity: 0.4; filter: grayscale(1); border: 1px dashed var(--red); }
+    .server-icon.offline:hover { opacity: 0.8; filter: none; border-style: solid; }
 
     /* Channel Sidebar */
     #channel-sidebar { width: 240px; background: var(--mantle); display: flex; flex-direction: column; flex-shrink: 0; z-index: 90; transition: transform 0.3s ease; }
