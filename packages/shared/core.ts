@@ -8,6 +8,7 @@ export interface Notifier {
 const identityCache = new Map<string, { profile: any, expires: number }>();
 const CACHE_TTL = 5 * 60 * 1000;
 
+// Performance Cache: Avoid redundant DB hits on every request
 let isBootstrapped = false;
 let cachedConfig: { serverId: string, serverName: string, adminHandle: string, inviteOnly: boolean } | null = null;
 
@@ -49,14 +50,16 @@ export async function handleRequest(
     const verifyIdentity = async (body: any, skipMemberCheck = false) => {
       let result: { did: string, handle: string } | null = null;
       const authHeader = request.headers.get('Authorization');
+      
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
         const session = await storage.getSession(token);
         if (session) result = { did: session.did, handle: session.handle };
       }
+
       if (!result) {
         const { accessToken, dpopProof, pdsUrl, requesterDid } = body;
-        const did = requesterDid || body.did; // Fallback to did if requesterDid not provided
+        const did = requesterDid || body.did; 
         if (!accessToken) throw { status: 401, error: 'Authentication required' };
         const cacheKey = `${did}:${accessToken}`;
         const cached = identityCache.get(cacheKey);
@@ -72,6 +75,7 @@ export async function handleRequest(
           identityCache.set(cacheKey, { profile: result, expires: Date.now() + CACHE_TTL });
         }
       }
+
       if (result) {
         if (await storage.isBanned(result.did)) throw { status: 403, error: `You are banned from this server (${result.did})`, banned: true };
         if (!skipMemberCheck && inviteOnly && result.handle !== adminHandle) {
@@ -103,6 +107,14 @@ export async function handleRequest(
     if (url.pathname === '/api/ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket upgrade', { status: 400 });
       if (!notifier) return new Response('WebSockets not supported', { status: 501 });
+      
+      // Strict Ban Check for WebSockets
+      const authHeader = request.headers.get('Authorization');
+      if (authHeader?.startsWith('Bearer ')) {
+        const session = await storage.getSession(authHeader.split(' ')[1]);
+        if (session && await storage.isBanned(session.did)) return new Response('Banned', { status: 403 });
+      }
+      
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
     }
 
@@ -111,7 +123,19 @@ export async function handleRequest(
       return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, inviteOnly, categories, channels: chanList, features: { ws: !!notifier } }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
+    // --- PROTECTED READS (Banned users blocked) ---
+    const enforceReadAccess = async () => {
+      try {
+        await verifyIdentity({}); // Checks token/ban status
+      } catch (e: any) {
+        if (e.banned) throw e;
+        // Ignore general auth required for reads if server is public
+        if (inviteOnly && e.inviteOnly) throw e;
+      }
+    };
+
     if (url.pathname === '/api/messages' && request.method === 'GET') {
+      await enforceReadAccess();
       const channelId = url.searchParams.get('channelId');
       const beforeId = url.searchParams.get('before');
       const limit = parseInt(url.searchParams.get('limit') || '50');
@@ -130,6 +154,7 @@ export async function handleRequest(
     }
 
     if (url.pathname === '/api/search' && request.method === 'GET') {
+      await enforceReadAccess();
       const channelId = url.searchParams.get('channelId');
       const query = url.searchParams.get('q');
       if (!query) return new Response(JSON.stringify([]), { headers });
@@ -142,6 +167,7 @@ export async function handleRequest(
     }
 
     if (url.pathname === '/api/message-context' && request.method === 'GET') {
+      await enforceReadAccess();
       const channelId = url.searchParams.get('channelId');
       const targetId = url.searchParams.get('id');
       if (!targetId) return new Response(JSON.stringify([]), { headers });
@@ -170,12 +196,9 @@ export async function handleRequest(
     if (url.pathname === '/api/join' && request.method === 'POST') {
       const body = await request.json() as any;
       const { code } = body;
-      // verifyIdentity with bypass ensures we handle DPoP properly without being blocked by membership check
       const profile = await verifyIdentity(body, true);
       const success = await storage.useInvite(code, profile.did);
       if (!success) return new Response(JSON.stringify({ error: 'Invalid or already used invite code' }), { status: 403, headers });
-      
-      // Auto-issue session token upon successful join
       const { token, expiresAt } = await createToken(profile.did, profile.handle);
       return new Response(JSON.stringify({ ok: true, token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
