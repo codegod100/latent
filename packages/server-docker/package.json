@@ -1,0 +1,16 @@
+{
+  "name": "latent-server-docker",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "smol-toml": "^1.6.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "scripts": {
+    "start": "bun src/index.ts"
+  }
+}

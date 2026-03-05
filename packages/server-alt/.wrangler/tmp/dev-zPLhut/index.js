@@ -27,108 +27,6 @@ globalThis.fetch = new Proxy(globalThis.fetch, {
   }
 });
 
-// ../../node_modules/ulid/dist/browser/index.js
-var ENCODING = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-var ENCODING_LEN = 32;
-var RANDOM_LEN = 16;
-var TIME_LEN = 10;
-var TIME_MAX = 281474976710655;
-var ULIDErrorCode;
-(function(ULIDErrorCode2) {
-  ULIDErrorCode2["Base32IncorrectEncoding"] = "B32_ENC_INVALID";
-  ULIDErrorCode2["DecodeTimeInvalidCharacter"] = "DEC_TIME_CHAR";
-  ULIDErrorCode2["DecodeTimeValueMalformed"] = "DEC_TIME_MALFORMED";
-  ULIDErrorCode2["EncodeTimeNegative"] = "ENC_TIME_NEG";
-  ULIDErrorCode2["EncodeTimeSizeExceeded"] = "ENC_TIME_SIZE_EXCEED";
-  ULIDErrorCode2["EncodeTimeValueMalformed"] = "ENC_TIME_MALFORMED";
-  ULIDErrorCode2["PRNGDetectFailure"] = "PRNG_DETECT";
-  ULIDErrorCode2["ULIDInvalid"] = "ULID_INVALID";
-  ULIDErrorCode2["Unexpected"] = "UNEXPECTED";
-  ULIDErrorCode2["UUIDInvalid"] = "UUID_INVALID";
-})(ULIDErrorCode || (ULIDErrorCode = {}));
-var ULIDError = class extends Error {
-  static {
-    __name(this, "ULIDError");
-  }
-  constructor(errorCode, message) {
-    super(`${message} (${errorCode})`);
-    this.name = "ULIDError";
-    this.code = errorCode;
-  }
-};
-function randomChar(prng) {
-  const randomPosition = Math.floor(prng() * ENCODING_LEN) % ENCODING_LEN;
-  return ENCODING.charAt(randomPosition);
-}
-__name(randomChar, "randomChar");
-function detectPRNG(root) {
-  const rootLookup = detectRoot();
-  const globalCrypto = rootLookup && (rootLookup.crypto || rootLookup.msCrypto) || null;
-  if (typeof globalCrypto?.getRandomValues === "function") {
-    return () => {
-      const buffer = new Uint8Array(1);
-      globalCrypto.getRandomValues(buffer);
-      return buffer[0] / 256;
-    };
-  } else if (typeof globalCrypto?.randomBytes === "function") {
-    return () => globalCrypto.randomBytes(1).readUInt8() / 256;
-  } else ;
-  throw new ULIDError(ULIDErrorCode.PRNGDetectFailure, "Failed to find a reliable PRNG");
-}
-__name(detectPRNG, "detectPRNG");
-function detectRoot() {
-  if (inWebWorker())
-    return self;
-  if (typeof window !== "undefined") {
-    return window;
-  }
-  if (typeof global !== "undefined") {
-    return global;
-  }
-  if (typeof globalThis !== "undefined") {
-    return globalThis;
-  }
-  return null;
-}
-__name(detectRoot, "detectRoot");
-function encodeRandom(len, prng) {
-  let str = "";
-  for (; len > 0; len--) {
-    str = randomChar(prng) + str;
-  }
-  return str;
-}
-__name(encodeRandom, "encodeRandom");
-function encodeTime(now, len = TIME_LEN) {
-  if (isNaN(now)) {
-    throw new ULIDError(ULIDErrorCode.EncodeTimeValueMalformed, `Time must be a number: ${now}`);
-  } else if (now > TIME_MAX) {
-    throw new ULIDError(ULIDErrorCode.EncodeTimeSizeExceeded, `Cannot encode a time larger than ${TIME_MAX}: ${now}`);
-  } else if (now < 0) {
-    throw new ULIDError(ULIDErrorCode.EncodeTimeNegative, `Time must be positive: ${now}`);
-  } else if (Number.isInteger(now) === false) {
-    throw new ULIDError(ULIDErrorCode.EncodeTimeValueMalformed, `Time must be an integer: ${now}`);
-  }
-  let mod, str = "";
-  for (let currentLen = len; currentLen > 0; currentLen--) {
-    mod = now % ENCODING_LEN;
-    str = ENCODING.charAt(mod) + str;
-    now = (now - mod) / ENCODING_LEN;
-  }
-  return str;
-}
-__name(encodeTime, "encodeTime");
-function inWebWorker() {
-  return typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
-}
-__name(inWebWorker, "inWebWorker");
-function ulid(seedTime, prng) {
-  const currentPRNG = prng || detectPRNG();
-  const seed = !seedTime || isNaN(seedTime) ? Date.now() : seedTime;
-  return encodeTime(seed, TIME_LEN) + encodeRandom(RANDOM_LEN, currentPRNG);
-}
-__name(ulid, "ulid");
-
 // ../../node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string, ptr) {
   let lines = string.slice(0, ptr).split(/\r\n|\n|\r/g);
@@ -837,112 +735,301 @@ function parse(toml, { maxDepth = 1e3, integersAsBigInt } = {}) {
 }
 __name(parse, "parse");
 
+// ../shared/storage.ts
+var D1Storage = class {
+  constructor(db) {
+    this.db = db;
+  }
+  static {
+    __name(this, "D1Storage");
+  }
+  async getConfig(key) {
+    return (await this.db.prepare("SELECT value FROM config WHERE key = ?").bind(key).first())?.value || null;
+  }
+  async setConfig(key, value) {
+    await this.db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)").bind(key, value).run();
+  }
+  async listCategories() {
+    return (await this.db.prepare("SELECT * FROM categories ORDER BY sort_order ASC").all()).results;
+  }
+  async addCategory(id, name, sortOrder) {
+    await this.db.prepare("INSERT INTO categories (id, name, sort_order) VALUES (?, ?, ?)").bind(id, name, sortOrder).run();
+  }
+  async deleteCategory(id) {
+    await this.db.prepare("DELETE FROM categories WHERE id = ?").bind(id).run();
+    await this.db.prepare("UPDATE channels SET category_id = NULL WHERE category_id = ?").bind(id).run();
+  }
+  async listChannels() {
+    return (await this.db.prepare("SELECT * FROM channels ORDER BY sort_order ASC").all()).results;
+  }
+  async addChannel(id, catId, name, desc, sortOrder) {
+    await this.db.prepare("INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)").bind(id, catId, name, desc, sortOrder).run();
+  }
+  async deleteChannel(id) {
+    await this.db.prepare("DELETE FROM channels WHERE id = ?").bind(id).run();
+  }
+  async listMessages(channelId) {
+    return (await this.db.prepare("SELECT * FROM messages WHERE channel_id = ? OR (channel_id IS NULL AND ? IS NULL) ORDER BY id DESC LIMIT 50").bind(channelId, channelId).all()).results;
+  }
+  async addMessage(id, did, handle, content, channelId) {
+    await this.db.prepare("INSERT INTO messages (id, did, handle, content, channel_id) VALUES (?, ?, ?, ?, ?)").bind(id, did, handle, content, channelId).run();
+  }
+};
+
+// ../../node_modules/ulid/dist/browser/index.js
+var ENCODING = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+var ENCODING_LEN = 32;
+var RANDOM_LEN = 16;
+var TIME_LEN = 10;
+var TIME_MAX = 281474976710655;
+var ULIDErrorCode;
+(function(ULIDErrorCode2) {
+  ULIDErrorCode2["Base32IncorrectEncoding"] = "B32_ENC_INVALID";
+  ULIDErrorCode2["DecodeTimeInvalidCharacter"] = "DEC_TIME_CHAR";
+  ULIDErrorCode2["DecodeTimeValueMalformed"] = "DEC_TIME_MALFORMED";
+  ULIDErrorCode2["EncodeTimeNegative"] = "ENC_TIME_NEG";
+  ULIDErrorCode2["EncodeTimeSizeExceeded"] = "ENC_TIME_SIZE_EXCEED";
+  ULIDErrorCode2["EncodeTimeValueMalformed"] = "ENC_TIME_MALFORMED";
+  ULIDErrorCode2["PRNGDetectFailure"] = "PRNG_DETECT";
+  ULIDErrorCode2["ULIDInvalid"] = "ULID_INVALID";
+  ULIDErrorCode2["Unexpected"] = "UNEXPECTED";
+  ULIDErrorCode2["UUIDInvalid"] = "UUID_INVALID";
+})(ULIDErrorCode || (ULIDErrorCode = {}));
+var ULIDError = class extends Error {
+  static {
+    __name(this, "ULIDError");
+  }
+  constructor(errorCode, message) {
+    super(`${message} (${errorCode})`);
+    this.name = "ULIDError";
+    this.code = errorCode;
+  }
+};
+function randomChar(prng) {
+  const randomPosition = Math.floor(prng() * ENCODING_LEN) % ENCODING_LEN;
+  return ENCODING.charAt(randomPosition);
+}
+__name(randomChar, "randomChar");
+function detectPRNG(root) {
+  const rootLookup = detectRoot();
+  const globalCrypto = rootLookup && (rootLookup.crypto || rootLookup.msCrypto) || null;
+  if (typeof globalCrypto?.getRandomValues === "function") {
+    return () => {
+      const buffer = new Uint8Array(1);
+      globalCrypto.getRandomValues(buffer);
+      return buffer[0] / 256;
+    };
+  } else if (typeof globalCrypto?.randomBytes === "function") {
+    return () => globalCrypto.randomBytes(1).readUInt8() / 256;
+  } else ;
+  throw new ULIDError(ULIDErrorCode.PRNGDetectFailure, "Failed to find a reliable PRNG");
+}
+__name(detectPRNG, "detectPRNG");
+function detectRoot() {
+  if (inWebWorker())
+    return self;
+  if (typeof window !== "undefined") {
+    return window;
+  }
+  if (typeof global !== "undefined") {
+    return global;
+  }
+  if (typeof globalThis !== "undefined") {
+    return globalThis;
+  }
+  return null;
+}
+__name(detectRoot, "detectRoot");
+function encodeRandom(len, prng) {
+  let str = "";
+  for (; len > 0; len--) {
+    str = randomChar(prng) + str;
+  }
+  return str;
+}
+__name(encodeRandom, "encodeRandom");
+function encodeTime(now, len = TIME_LEN) {
+  if (isNaN(now)) {
+    throw new ULIDError(ULIDErrorCode.EncodeTimeValueMalformed, `Time must be a number: ${now}`);
+  } else if (now > TIME_MAX) {
+    throw new ULIDError(ULIDErrorCode.EncodeTimeSizeExceeded, `Cannot encode a time larger than ${TIME_MAX}: ${now}`);
+  } else if (now < 0) {
+    throw new ULIDError(ULIDErrorCode.EncodeTimeNegative, `Time must be positive: ${now}`);
+  } else if (Number.isInteger(now) === false) {
+    throw new ULIDError(ULIDErrorCode.EncodeTimeValueMalformed, `Time must be an integer: ${now}`);
+  }
+  let mod, str = "";
+  for (let currentLen = len; currentLen > 0; currentLen--) {
+    mod = now % ENCODING_LEN;
+    str = ENCODING.charAt(mod) + str;
+    now = (now - mod) / ENCODING_LEN;
+  }
+  return str;
+}
+__name(encodeTime, "encodeTime");
+function inWebWorker() {
+  return typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
+}
+__name(inWebWorker, "inWebWorker");
+function ulid(seedTime, prng) {
+  const currentPRNG = prng || detectPRNG();
+  const seed = !seedTime || isNaN(seedTime) ? Date.now() : seedTime;
+  return encodeTime(seed, TIME_LEN) + encodeRandom(RANDOM_LEN, currentPRNG);
+}
+__name(ulid, "ulid");
+
+// ../shared/core.ts
+async function handleRequest(request, storage, configSeed2) {
+  const url = new URL(request.url);
+  const headers = new Headers({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, DPoP"
+  });
+  if (request.method === "OPTIONS") return new Response(null, { headers });
+  const serverId = await storage.getConfig("server_id") || await (async () => {
+    const id = ulid();
+    await storage.setConfig("server_id", id);
+    return id;
+  })();
+  const serverName = await storage.getConfig("server_name") || await (async () => {
+    await storage.setConfig("server_name", configSeed2.defaultName);
+    return configSeed2.defaultName;
+  })();
+  const adminHandle = await storage.getConfig("admin_handle") || await (async () => {
+    await storage.setConfig("admin_handle", configSeed2.adminHandle);
+    return configSeed2.adminHandle;
+  })();
+  const channels = await storage.listChannels();
+  if (channels.length === 0) {
+    await storage.addChannel(ulid(), null, "general", "General discussion", 0);
+  }
+  const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
+    const { accessToken, dpopProof, pdsUrl, did } = body;
+    const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
+    const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
+    const dpopNonce = pdsRes.headers.get("dpop-nonce");
+    if (!pdsRes.ok) {
+      throw {
+        status: pdsRes.status,
+        isChallenge: pdsRes.status === 401 && !!dpopNonce,
+        dpopNonce,
+        error: "Verification failed"
+      };
+    }
+    const profile = await pdsRes.json();
+    if (profile.handle !== adminHandle) {
+      throw { status: 403, error: "Admin only" };
+    }
+    return profile;
+  }, "verifyAdmin");
+  try {
+    if (url.pathname === "/") {
+      return new Response(`
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>ATProto Backend</title>
+          <style>
+            body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
+            h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
+            strong { color: #f5e0dc; }
+            .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
+            code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
+            a { color: #89b4fa; text-decoration: none; }
+          </style>
+        </head>
+        <body>
+          <h1>ATProto Verified Backend: ${serverName}</h1>
+          <div class="info-box">
+            <strong>Server ID:</strong> <code>${serverId}</code><br>
+            <strong>Admin:</strong> <code>@${adminHandle}</code>
+          </div>
+          <p>Status: <strong>Active (latent-core)</strong></p>
+        </body>
+        </html>
+      `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
+    }
+    if (url.pathname === "/api/meta") {
+      if (request.method === "GET") {
+        const categories = await storage.listCategories();
+        const chanList = await storage.listChannels();
+        return new Response(
+          JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList }),
+          { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } }
+        );
+      }
+      if (request.method === "POST") {
+        const body = await request.json();
+        await verifyAdmin(body);
+        await storage.setConfig("server_name", body.name);
+        return new Response(JSON.stringify({ ok: true }), { headers });
+      }
+    }
+    if (url.pathname === "/api/categories" && request.method === "POST") {
+      const body = await request.json();
+      await verifyAdmin(body);
+      const id = ulid();
+      await storage.addCategory(id, body.name, body.sort_order || 0);
+      return new Response(JSON.stringify({ ok: true, id }), { headers });
+    }
+    if (url.pathname.startsWith("/api/categories/") && request.method === "DELETE") {
+      const id = url.pathname.split("/").pop();
+      const body = await request.json();
+      await verifyAdmin(body);
+      await storage.deleteCategory(id);
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
+    if (url.pathname === "/api/channels" && request.method === "POST") {
+      const body = await request.json();
+      await verifyAdmin(body);
+      const id = ulid();
+      await storage.addChannel(id, body.category_id || null, body.name, body.description || "", body.sort_order || 0);
+      return new Response(JSON.stringify({ ok: true, id }), { headers });
+    }
+    if (url.pathname.startsWith("/api/channels/") && request.method === "DELETE") {
+      const id = url.pathname.split("/").pop();
+      const body = await request.json();
+      await verifyAdmin(body);
+      await storage.deleteChannel(id);
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
+    if (url.pathname === "/api/messages" && request.method === "GET") {
+      const channelId = url.searchParams.get("channelId");
+      const messages = await storage.listMessages(channelId);
+      return new Response(JSON.stringify(messages), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
+    }
+    if (url.pathname === "/api/submit-message" && request.method === "POST") {
+      const body = await request.json();
+      await verifyAdmin(body);
+      const { did, content, channelId } = body;
+      const msgId = ulid();
+      const profile = await storage.getConfig(`handle:${did}`) || body.did;
+      const pdsUrl = body.pdsUrl;
+      const accessToken = body.accessToken;
+      const dpopProof = body.dpopProof;
+      const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
+      const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
+      const profileData = await pdsRes.json();
+      await storage.addMessage(msgId, did, profileData.handle, content, channelId || null);
+      return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
+    }
+  } catch (err) {
+    const status = err.status === 401 ? 200 : err.status || 500;
+    return new Response(JSON.stringify(err), { status, headers });
+  }
+  return new Response("Not Found", { status: 404, headers });
+}
+__name(handleRequest, "handleRequest");
+
 // src/index.ts
 import tomlString from "./f04b2c01401a29445662bc3da0bbbc1cd13e934b-server-config.toml";
 var configSeed = parse(tomlString);
-async function getOrSeedConfig(db, key, defaultValue) {
-  const row = await db.prepare("SELECT value FROM config WHERE key = ?").bind(key).first();
-  if (row) return row.value;
-  await db.prepare("INSERT INTO config (key, value) VALUES (?, ?)").bind(key, defaultValue).run();
-  return defaultValue;
-}
-__name(getOrSeedConfig, "getOrSeedConfig");
 var src_default = {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const headers = new Headers({
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, DPoP"
-    });
-    if (request.method === "OPTIONS") return new Response(null, { headers });
-    const serverName = await getOrSeedConfig(env.DB, "server_name", configSeed.defaultName);
-    const adminHandle = await getOrSeedConfig(env.DB, "admin_handle", configSeed.adminHandle);
-    const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
-      const { accessToken, dpopProof, pdsUrl, did } = body;
-      const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-      const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
-      const dpopNonce = pdsRes.headers.get("dpop-nonce");
-      if (!pdsRes.ok) throw { status: pdsRes.status, dpopNonce, error: "Verification failed" };
-      const profile = await pdsRes.json();
-      if (profile.handle !== adminHandle) throw { status: 403, error: "Admin only" };
-      return profile;
-    }, "verifyAdmin");
-    try {
-      if (url.pathname === "/api/meta") {
-        if (request.method === "GET") {
-          const categories = await env.DB.prepare("SELECT * FROM categories ORDER BY sort_order ASC").all();
-          const channels = await env.DB.prepare("SELECT * FROM channels ORDER BY sort_order ASC").all();
-          return new Response(JSON.stringify({
-            name: serverName,
-            adminHandle,
-            categories: categories.results,
-            channels: channels.results
-          }), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" } });
-        }
-        if (request.method === "POST") {
-          const body = await request.json();
-          await verifyAdmin(body);
-          await env.DB.prepare("UPDATE config SET value = ? WHERE key = ?").bind(body.name, "server_name").run();
-          return new Response(JSON.stringify({ ok: true }), { headers });
-        }
-      }
-      if (url.pathname === "/api/categories" && request.method === "POST") {
-        const body = await request.json();
-        await verifyAdmin(body);
-        const id = ulid();
-        await env.DB.prepare("INSERT INTO categories (id, name, sort_order) VALUES (?, ?, ?)").bind(id, body.name, body.sort_order || 0).run();
-        return new Response(JSON.stringify({ ok: true, id }), { headers });
-      }
-      if (url.pathname.startsWith("/api/categories/") && request.method === "DELETE") {
-        const id = url.pathname.split("/").pop();
-        const body = await request.json();
-        await verifyAdmin(body);
-        await env.DB.prepare("DELETE FROM categories WHERE id = ?").bind(id).run();
-        await env.DB.prepare("UPDATE channels SET category_id = NULL WHERE category_id = ?").bind(id).run();
-        return new Response(JSON.stringify({ ok: true }), { headers });
-      }
-      if (url.pathname === "/api/channels" && request.method === "POST") {
-        const body = await request.json();
-        await verifyAdmin(body);
-        const id = ulid();
-        await env.DB.prepare("INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)").bind(id, body.category_id || null, body.name, body.description || "", body.sort_order || 0).run();
-        return new Response(JSON.stringify({ ok: true, id }), { headers });
-      }
-      if (url.pathname.startsWith("/api/channels/") && request.method === "DELETE") {
-        const id = url.pathname.split("/").pop();
-        const body = await request.json();
-        await verifyAdmin(body);
-        await env.DB.prepare("DELETE FROM channels WHERE id = ?").bind(id).run();
-        return new Response(JSON.stringify({ ok: true }), { headers });
-      }
-      if (url.pathname === "/api/messages" && request.method === "GET") {
-        const channelId = url.searchParams.get("channelId");
-        const { results } = await env.DB.prepare(
-          "SELECT * FROM messages WHERE channel_id = ? OR (channel_id IS NULL AND ? IS NULL) ORDER BY id DESC LIMIT 50"
-        ).bind(channelId, channelId).all();
-        return new Response(JSON.stringify(results), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" } });
-      }
-      if (url.pathname === "/api/submit-message" && request.method === "POST") {
-        const body = await request.json();
-        const { accessToken, dpopProof, pdsUrl, did, content, channelId } = body;
-        const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-        const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
-        const dpopNonce = pdsRes.headers.get("dpop-nonce");
-        if (!pdsRes.ok) {
-          if (pdsRes.status === 401 && dpopNonce) return new Response(JSON.stringify({ isChallenge: true, dpopNonce }), { status: 200, headers });
-          return new Response(JSON.stringify({ error: "Verification failed" }), { status: pdsRes.status, headers });
-        }
-        const profile = await pdsRes.json();
-        const msgId = ulid();
-        await env.DB.prepare("INSERT INTO messages (id, did, handle, content, channel_id) VALUES (?, ?, ?, ?, ?)").bind(msgId, did, profile.handle, content, channelId || null).run();
-        return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
-      }
-    } catch (err) {
-      if (err.status) return new Response(JSON.stringify(err), { status: err.status === 401 ? 200 : err.status, headers });
-      return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers });
-    }
-    return new Response("Not Found", { status: 404, headers });
+    const storage = new D1Storage(env.DB);
+    return handleRequest(request, storage, configSeed);
   }
 };
 

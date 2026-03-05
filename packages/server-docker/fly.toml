@@ -1,0 +1,20 @@
+app = "latent-docker-backend"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8789
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[mounts]]
+  source = "latent_data"
+  destination = "/app/data"
+
+[env]
+  DB_PATH = "/app/data/data.db"

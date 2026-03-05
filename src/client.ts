@@ -4,11 +4,13 @@ import { BrowserOAuthClient } from '@atproto/oauth-client-browser'
 const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
 const HOSTNAME = IS_LOCAL ? '127.0.0.1' : window.location.hostname
 
-const SERVER_URLS = [
+const DEFAULT_SERVER_URLS = [
   IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev`,
-  IS_LOCAL ? `http://${HOSTNAME}:8788` : `https://latent-server-alt.veronika-m-winters.workers.dev`
+  IS_LOCAL ? `http://${HOSTNAME}:8788` : `https://latent-server-alt.veronika-m-winters.workers.dev`,
+  `https://latent-docker-backend.fly.dev`
 ]
 
+let SERVER_URLS: string[] = []
 let SERVERS: any[] = []
 let currentServer: any = null
 let currentChannel: any = null
@@ -48,55 +50,60 @@ const getDpopProof = async (session: any, method: string, url: string, nonce: st
   const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
   const ath = btoa(String.fromCharCode(...new Uint8Array(hashBuffer))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 
-  return await key.createJwt(
-    { alg, typ: 'dpop+jwt', jwk },
-    {
-      iat: Math.floor(Date.now() / 1000),
-      jti: crypto.randomUUID(),
-      htm: method,
-      htu: url.split('?')[0].split('#')[0],
-      ath,
-      nonce
+  const payload: any = {
+    iat: Math.floor(Date.now() / 1000),
+    jti: crypto.randomUUID(),
+    htm: method,
+    htu: url.split('?')[0].split('#')[0],
+    ath
+  }
+  // CRITICAL: Only include nonce if it is a non-null string
+  if (nonce) payload.nonce = nonce
+
+  return await key.createJwt({ alg, typ: 'dpop+jwt', jwk }, payload)
+}
+
+// --- PDS FETCHER (Handles Nonce Retries) ---
+async function pdsFetch(session: any, url: string, init: RequestInit = {}) {
+  const tokens = await session.getTokenSet()
+  
+  const perform = async (nonce: string | null = null): Promise<Response> => {
+    const proof = await getDpopProof(session, init.method || 'GET', url, nonce)
+    const res = await fetch(url, {
+      ...init,
+      headers: {
+        ...init.headers,
+        'Authorization': `DPoP ${tokens.access_token}`,
+        'DPoP': proof
+      }
+    })
+    
+    if (res.status === 401) {
+      const newNonce = res.headers.get('dpop-nonce')
+      if (newNonce && nonce !== newNonce) {
+        log('PDS Nonce challenge, retrying...')
+        return perform(newNonce)
+      }
     }
-  )
+    return res
+  }
+  
+  return perform()
 }
 
 async function init() {
   try {
-    SERVERS = await Promise.all(SERVER_URLS.map(async (url) => {
-      try {
-        const res = await fetch(`${url}/api/meta`)
-        const meta = await res.json()
-        return { ...meta, url, id: meta.id || url }
-      } catch (e) {
-        return { id: url, name: 'Offline Server', url, error: true, categories: [], channels: [] }
-      }
-    }))
-
-    currentServer = SERVERS[0]
-
     const result = await client.init()
     document.getElementById('loading-panel')!.style.display = 'none'
     
-    // PERMALINK: /<serverId>/<channelId>
-    const pathParts = window.location.pathname.split('/').filter(Boolean)
-    if (pathParts[0]) {
-      const server = SERVERS.find(s => s.id === pathParts[0])
-      if (server) {
-        currentServer = server
-        if (pathParts[1]) {
-          const chan = server.channels.find((c: any) => c.id === pathParts[1])
-          if (chan) currentChannel = chan
-        }
-      }
+    if (result?.session) {
+      await showApp(result.session)
+    } else {
+      SERVER_URLS = DEFAULT_SERVER_URLS
+      await hydrateServers()
+      log('No session found. Using default servers.')
+      document.getElementById('login-panel')!.style.display = 'flex'
     }
-
-    if (!currentChannel && currentServer.channels?.length > 0) {
-      currentChannel = currentServer.channels[0]
-    }
-
-    if (result?.session) await showApp(result.session)
-    else document.getElementById('login-panel')!.style.display = 'flex'
     
     renderAll()
   } catch (err) {
@@ -104,34 +111,93 @@ async function init() {
   }
 }
 
+async function hydrateServers() {
+  SERVERS = await Promise.all(SERVER_URLS.map(async (url) => {
+    try {
+      const res = await fetch(`${url}/api/meta`)
+      const meta = await res.json()
+      return { ...meta, url, id: meta.id }
+    } catch (e) {
+      return { id: url, name: 'Offline Server', url, error: true, categories: [], channels: [] }
+    }
+  }))
+
+  const pathParts = window.location.pathname.split('/').filter(Boolean)
+  if (pathParts[0]) {
+    const server = SERVERS.find(s => s.id === pathParts[0])
+    if (server) currentServer = server
+  }
+  if (!currentServer) currentServer = SERVERS[0]
+
+  if (currentServer && !currentServer.error) {
+    if (pathParts[1]) {
+      const chan = currentServer.channels?.find((c: any) => c.id === pathParts[1])
+      if (chan) currentChannel = chan
+    }
+    if (!currentChannel && currentServer.channels?.length > 0) {
+      currentChannel = currentServer.channels[0]
+    }
+  }
+}
+
+async function syncServersFromPds(session: any) {
+  log('Syncing server list from PDS...')
+  try {
+    const tokens = await session.getTokenSet()
+    const pdsUrl = tokens.aud.replace(/\/+$/, '')
+    const listUrl = `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`
+    
+    const res = await pdsFetch(session, listUrl)
+    const data = await res.json()
+    
+    if (data.records?.length > 0) {
+      SERVER_URLS = data.records.map((r: any) => r.value.url)
+      log(`Found ${SERVER_URLS.length} servers in PDS.`)
+    } else {
+      SERVER_URLS = DEFAULT_SERVER_URLS
+      log('No servers found in PDS. Using defaults.')
+    }
+  } catch (e) {
+    log('Failed to sync from PDS, using defaults', e)
+    SERVER_URLS = DEFAULT_SERVER_URLS
+  }
+  await hydrateServers()
+}
+
 function renderAll() {
   renderServerList()
-  renderChannelList()
-  document.getElementById('current-server-name')!.textContent = currentServer.name
-  document.getElementById('current-channel-name')!.textContent = currentChannel?.name || 'no-channel'
-  refreshMessages()
-  renderAdminUI()
+  if (currentServer) {
+    renderChannelList()
+    document.getElementById('current-server-name')!.textContent = currentServer.name
+    document.getElementById('current-channel-name')!.textContent = currentChannel?.name || 'no-channel'
+    refreshMessages()
+    renderAdminUI()
+  }
 }
 
 function renderServerList() {
   const sidebar = document.getElementById('server-sidebar')!
-  sidebar.innerHTML = SERVERS.map(s => `
-    <div class="server-icon ${s.id === currentServer.id ? 'active' : ''}" 
+  let html = SERVERS.map(s => `
+    <div class="server-icon ${s.id === currentServer?.id ? 'active' : ''}" 
          onclick="window.selectServer('${s.id}')" 
          title="${s.name}">${s.name[0]}</div>
   `).join('')
+  
+  html += `<div class="server-icon add-server" onclick="window.toggleClientSettings()" title="Server Settings">+</div>`
+  sidebar.innerHTML = html
 }
 
 function renderChannelList() {
   const list = document.getElementById('channel-list')!
-  if (!currentServer) return
+  if (!currentServer || currentServer.error) {
+    list.innerHTML = '<div style="padding:1rem; color:#f23f42;">Server Offline</div>'
+    return
+  }
   
   const categories = currentServer.categories || []
   const channels = currentServer.channels || []
 
   let html = ''
-  
-  // Uncategorized
   const uncategorized = channels.filter((c: any) => !c.category_id)
   uncategorized.forEach((c: any) => {
     html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')">
@@ -140,7 +206,6 @@ function renderChannelList() {
     </div>`
   })
 
-  // Grouped by Category
   categories.forEach((cat: any) => {
     html += `<div class="category-item">
       <span class="category-arrow">▼</span> ${cat.name}
@@ -156,13 +221,72 @@ function renderChannelList() {
     })
   })
 
-  // Global actions for admin
   if (isAdmin()) {
     html += `<div class="category-item" onclick="window.addCategory()" style="cursor:pointer; margin-top:10px; color:#5865f2;">+ Add Category</div>`
   }
 
   list.innerHTML = html
 }
+
+// --- CLIENT SETTINGS ---
+(window as any).toggleClientSettings = () => {
+  const modal = document.getElementById('client-settings-modal')!
+  modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'
+  if (modal.style.display === 'flex') {
+    (document.getElementById('server-urls-input') as HTMLTextAreaElement).value = SERVER_URLS.join('\n')
+  }
+};
+
+(window as any).saveClientSettings = async () => {
+  const session = (window as any).atprotoSession
+  const input = (document.getElementById('server-urls-input') as HTMLTextAreaElement).value
+  const newUrls = input.split('\n').map(u => u.trim()).filter(Boolean)
+  
+  if (!session) {
+    localStorage.setItem('atproto_servers', JSON.stringify(newUrls))
+    return location.href = '/'
+  }
+
+  log('Persisting server list to PDS...')
+  try {
+    const tokens = await session.getTokenSet()
+    const pdsUrl = tokens.aud.replace(/\/+$/, '')
+    
+    // 1. Delete old records
+    const listRes = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
+    const existing = await listRes.json()
+    
+    for (const record of (existing.records || [])) {
+      const rkey = record.uri.split('/').pop()
+      await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey })
+      })
+    }
+
+    // 2. Add new records
+    for (const url of newUrls) {
+      log(`Adding server: ${url}`)
+      const res = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo: session.did,
+          collection: 'org.latha.latent.server',
+          record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() }
+        })
+      })
+      if (!res.ok) throw new Error('PDS add failed')
+    }
+
+    log('Server list synced to PDS!')
+    location.href = '/'
+  } catch (e) {
+    log('Failed to save to PDS', e)
+    alert('Failed to save to PDS. Check console.')
+  }
+};
 
 (window as any).selectServer = (id: string) => {
   const server = SERVERS.find(s => s.id === id)
@@ -172,7 +296,7 @@ function renderChannelList() {
     window.history.pushState({}, '', `/${currentServer.id}${currentChannel ? '/' + currentChannel.id : ''}`)
     renderAll()
   }
-}
+};
 
 (window as any).selectChannel = (id: string) => {
   const chan = currentServer.channels.find((c: any) => c.id === id)
@@ -181,7 +305,7 @@ function renderChannelList() {
     window.history.pushState({}, '', `/${currentServer.id}/${currentChannel.id}`)
     renderAll()
   }
-}
+};
 
 async function refreshMessages() {
   const container = document.getElementById('message-list')!
@@ -213,24 +337,18 @@ async function showApp(session: any) {
   document.getElementById('login-panel')!.style.display = 'none'
   document.getElementById('app-container')!.style.display = 'flex'
   
-  const fetchProfile = async (nonce: string | null = null) => {
+  const fetchProfile = async () => {
     try {
       const tokens = await session.getTokenSet()
       const pdsUrl = tokens.aud.replace(/\/+$/, '')
       const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
       
-      const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
-      const res = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${tokens.access_token}`, 'DPoP': dpop } })
-      
-      if (res.status === 401) {
-        const nextNonce = res.headers.get('dpop-nonce')
-        if (nextNonce && !nonce) return fetchProfile(nextNonce)
-      }
-
+      const res = await pdsFetch(session, probeUrl)
       const profile = await res.json()
       if (profile.handle) {
         currentUserHandle = profile.handle
         document.getElementById('user-handle')!.textContent = `@${profile.handle}`
+        await syncServersFromPds(session)
         renderAdminUI() 
       }
     } catch (e) { log('Profile fetch failed', e) }
@@ -238,22 +356,29 @@ async function showApp(session: any) {
   await fetchProfile()
 }
 
-const isAdmin = () => currentUserHandle && currentServer.adminHandle === currentUserHandle
+const isAdmin = () => currentUserHandle && currentServer?.adminHandle === currentUserHandle
 
 function renderAdminUI() {
   const adminBtn = document.getElementById('admin-tools')!
   adminBtn.style.display = isAdmin() ? 'block' : 'none'
 }
 
+(window as any).startLogin = async () => {
+  const handle = (document.getElementById('handle') as HTMLInputElement).value
+  log('Starting login for ' + handle)
+  await client.signIn(handle)
+};
+
+(window as any).logout = () => { localStorage.clear(); location.href = '/' };
+
 (window as any).toggleAdminMenu = () => {
   const menu = document.getElementById('admin-menu')!
-  menu.style.display = menu.style.display === 'none' ? 'block' : 'none'
-  if (menu.style.display === 'block') {
+  menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'
+  if (menu.style.display === 'flex') {
     (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer.name
   }
-}
+};
 
-// --- ADMIN ACTIONS ---
 async function adminFetch(endpoint: string, method: string, body: any) {
   const session = (window as any).atprotoSession
   const tokens = await session.getTokenSet()
@@ -322,8 +447,6 @@ async function adminFetch(endpoint: string, method: string, body: any) {
     renderAll()
   }
 };
-
-(window as any).logout = () => { localStorage.clear(); location.href = '/' };
 
 (window as any).submitMessage = async () => {
   const session = (window as any).atprotoSession

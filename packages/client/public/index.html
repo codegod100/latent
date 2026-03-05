@@ -4,76 +4,109 @@
   <meta charset="utf-8">
   <title>ATProto Multi-Server Chat</title>
   <style>
-    body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; background: #313338; color: #dbdee1; height: 100vh; overflow: hidden; }
+    :root {
+      --base: #1e1e2e;
+      --mantle: #181825;
+      --crust: #11111b;
+      --text: #cdd6f4;
+      --subtext0: #a6adc8;
+      --surface0: #313244;
+      --surface1: #45475a;
+      --surface2: #585b70;
+      --blue: #89b4fa;
+      --lavender: #b4befe;
+      --sapphire: #74c7ec;
+      --sky: #89dceb;
+      --teal: #94e2d5;
+      --green: #a6e3a1;
+      --yellow: #f9e2af;
+      --peach: #fab387;
+      --maroon: #eba0ac;
+      --red: #f38ba8;
+      --mauve: #cba6f7;
+      --pink: #f5c2e7;
+      --flamingo: #f2cdcd;
+      --rosewater: #f5e0dc;
+    }
+
+    body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text); height: 100vh; overflow: hidden; }
     #app-container { display: none; height: 100vh; width: 100vw; }
     
     /* Server Sidebar */
-    #server-sidebar { width: 72px; background: #1e1f22; display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; flex-shrink: 0; }
-    .server-icon { width: 48px; height: 48px; border-radius: 50%; background: #313338; color: #dbdee1; display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; transition: all 0.2s; position: relative; }
-    .server-icon:hover { border-radius: 16px; background: #5865f2; color: white; }
-    .server-icon.active { border-radius: 16px; background: #5865f2; color: white; }
-    .server-icon.active::before { content: ""; position: absolute; left: -12px; height: 40px; width: 4px; background: white; border-radius: 0 4px 4px 0; }
+    #server-sidebar { width: 72px; background: var(--crust); display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; flex-shrink: 0; border-right: 1px solid var(--mantle); }
+    .server-icon { width: 48px; height: 48px; border-radius: 50%; background: var(--surface0); color: var(--text); display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; transition: all 0.2s; position: relative; }
+    .server-icon:hover { border-radius: 16px; background: var(--lavender); color: var(--crust); }
+    .server-icon.active { border-radius: 16px; background: var(--blue); color: var(--crust); }
+    .server-icon.active::before { content: ""; position: absolute; left: -12px; height: 40px; width: 4px; background: var(--text); border-radius: 0 4px 4px 0; }
+    .server-icon.add-server { color: var(--green); background: var(--surface0); font-size: 24px; }
+    .server-icon.add-server:hover { background: var(--green); color: var(--crust); }
 
     /* Channel Sidebar */
-    #channel-sidebar { width: 240px; background: #2b2d31; display: flex; flex-direction: column; flex-shrink: 0; }
-    #server-header { height: 48px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1f2123; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    #channel-sidebar { width: 240px; background: var(--mantle); display: flex; flex-direction: column; flex-shrink: 0; }
+    #server-header { height: 48px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--crust); font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
     #channel-list { flex-grow: 1; overflow-y: auto; padding: 12px 8px; }
     
-    .category-item { display: flex; align-items: center; padding: 12px 8px 4px 8px; font-size: 12px; color: #949ba4; font-weight: bold; text-transform: uppercase; cursor: default; }
+    .category-item { display: flex; align-items: center; padding: 12px 8px 4px 8px; font-size: 12px; color: var(--subtext0); font-weight: bold; text-transform: uppercase; cursor: default; }
     .category-item:hover .add-icon, .category-item:hover .delete-icon { opacity: 1; }
     .category-arrow { font-size: 8px; margin-right: 4px; width: 12px; }
     
-    .channel-item { display: flex; align-items: center; padding: 6px 8px; border-radius: 4px; cursor: pointer; color: #949ba4; margin-bottom: 2px; }
-    .channel-item:hover { background: #35373c; color: #dbdee1; }
-    .channel-item.active { background: #3f4147; color: white; }
+    .channel-item { display: flex; align-items: center; padding: 6px 8px; border-radius: 4px; cursor: pointer; color: var(--subtext0); margin-bottom: 2px; }
+    .channel-item:hover { background: var(--surface0); color: var(--text); }
+    .channel-item.active { background: var(--surface1); color: white; }
     .channel-item:hover .delete-icon { opacity: 1; }
-    .channel-hash { color: #80848e; margin-right: 6px; font-size: 1.2rem; }
+    .channel-hash { color: var(--surface2); margin-right: 6px; font-size: 1.2rem; }
     
     .add-icon, .delete-icon { margin-left: auto; opacity: 0; transition: opacity 0.1s; cursor: pointer; font-size: 14px; padding: 0 4px; }
-    .add-icon:hover, .delete-icon:hover { color: white; }
+    .add-icon:hover, .delete-icon:hover { color: var(--text); }
 
     /* Main Chat Area */
-    #chat-area { flex-grow: 1; display: flex; flex-direction: column; background: #313338; position: relative; }
-    #chat-header { height: 48px; padding: 0 16px; display: flex; align-items: center; border-bottom: 1px solid #262729; font-weight: bold; }
+    #chat-area { flex-grow: 1; display: flex; flex-direction: column; background: var(--base); position: relative; }
+    #chat-header { height: 48px; padding: 0 16px; display: flex; align-items: center; border-bottom: 1px solid var(--mantle); font-weight: bold; }
     #message-list { flex-grow: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
     #input-area { padding: 0 16px 24px 16px; }
-    #message-input { width: 100%; padding: 11px; background: #383a40; border: none; border-radius: 8px; color: #dbdee1; font-size: 1rem; box-sizing: border-box; }
-    #message-input:focus { outline: none; }
+    #message-input { width: 100%; padding: 11px; background: var(--surface0); border: none; border-radius: 8px; color: var(--text); font-size: 1rem; box-sizing: border-box; }
+    #message-input:focus { outline: 1px solid var(--lavender); }
 
     .msg-item { display: flex; flex-direction: column; gap: 2px; }
     .msg-header { display: flex; align-items: baseline; gap: 8px; }
-    .msg-author { color: #f2f3f5; font-weight: 600; }
-    .msg-date { color: #949ba4; font-size: 0.7rem; }
-    .msg-content { color: #dbdee1; line-height: 1.375; }
+    .msg-author { color: var(--pink); font-weight: 600; }
+    .msg-date { color: var(--subtext0); font-size: 0.7rem; }
+    .msg-content { color: var(--text); line-height: 1.375; }
 
-    /* Admin UI */
-    #admin-menu { position: absolute; top: 60px; right: 20px; background: #1e1f22; border-radius: 8px; padding: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 50; width: 250px; border: 1px solid #4e5058; }
-    .admin-field { margin-bottom: 12px; }
-    .admin-label { display: block; font-size: 12px; color: #b5bac1; text-transform: uppercase; margin-bottom: 8px; font-weight: bold; }
-    .admin-input { width: 100%; padding: 8px; background: #313338; border: 1px solid #1e1f22; border-radius: 3px; color: white; box-sizing: border-box; }
-    .admin-save-btn { width: 100%; padding: 8px; background: #23a559; color: white; border: none; border-radius: 3px; cursor: pointer; margin-top: 8px; font-weight: bold; }
+    /* Modals / Menus */
+    #admin-menu, #client-settings-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 500; }
+    .modal-card { background: var(--mantle); width: 100%; max-width: 440px; border-radius: 8px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); border: 1px solid var(--surface0); }
+    .admin-field { margin-bottom: 20px; }
+    .admin-label { display: block; font-size: 12px; color: var(--subtext0); text-transform: uppercase; margin-bottom: 8px; font-weight: bold; }
+    .admin-input { width: 100%; padding: 10px; background: var(--base); border: 1px solid var(--surface0); border-radius: 3px; color: var(--text); box-sizing: border-box; font-size: 1rem; }
+    .admin-input:focus { outline: 1px solid var(--blue); }
+    .admin-save-btn { width: 100%; padding: 10px; background: var(--blue); color: var(--crust); border: none; border-radius: 3px; cursor: pointer; margin-top: 8px; font-weight: bold; }
+    .admin-save-btn:hover { filter: brightness(1.1); }
+    .modal-close { position: absolute; top: 20px; right: 20px; color: var(--subtext0); cursor: pointer; font-size: 24px; }
 
     /* Login & Loading */
-    #login-panel, #loading-panel { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #313338; z-index: 100; }
-    .login-card { background: #313338; padding: 32px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); width: 100%; max-width: 400px; text-align: center; }
-    .login-input { width: 100%; padding: 10px; margin: 20px 0; background: #1e1f22; border: 1px solid #1e1f22; border-radius: 3px; color: white; box-sizing: border-box; }
-    .login-btn { width: 100%; padding: 10px; background: #5865f2; color: white; border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }
-    .spinner { border: 4px solid #4e5058; border-top: 4px solid #5865f2; border-radius: 50%; width: 32px; height: 32px; animation: spin 1s linear infinite; margin-bottom: 12px; }
+    #login-panel, #loading-panel { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--base); z-index: 100; }
+    .login-card { background: var(--mantle); padding: 32px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); width: 100%; max-width: 400px; text-align: center; border: 1px solid var(--surface0); }
+    .login-input { width: 100%; padding: 10px; margin: 20px 0; background: var(--base); border: 1px solid var(--surface0); border-radius: 3px; color: var(--text); box-sizing: border-box; }
+    .login-btn { width: 100%; padding: 10px; background: var(--mauve); color: var(--crust); border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }
+    .spinner { border: 4px solid var(--surface0); border-top: 4px solid var(--blue); border-radius: 50%; width: 32px; height: 32px; animation: spin 1s linear infinite; margin-bottom: 12px; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    #user-info { margin-top: auto; padding: 12px; background: #232428; display: flex; align-items: center; gap: 8px; }
-    #user-handle { font-size: 0.8rem; font-weight: bold; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #user-info { margin-top: auto; padding: 12px; background: var(--crust); display: flex; align-items: center; gap: 8px; }
+    #user-handle { font-size: 0.8rem; font-weight: bold; color: var(--lavender); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    
+    #console { position: absolute; bottom: 80px; right: 20px; width: 300px; max-height: 300px; background: var(--crust); color: var(--green); padding: 10px; font-family: monospace; font-size: 11px; overflow: auto; border-radius: 8px; display: none; pointer-events: none; opacity: 0.8; z-index: 300; border: 1px solid var(--surface0); }
   </style>
 </head>
 <body>
   <div id="loading-panel">
     <div class="spinner"></div>
-    <div>Connecting to Identity Notary...</div>
+    <div style="color: var(--subtext0)">Connecting to Identity Notary...</div>
   </div>
 
   <div id="login-panel" style="display:none">
     <div class="login-card">
-      <h2>Welcome back!</h2>
-      <input id="handle" class="login-input" value="nandi.latha.org" placeholder="handle.bsky.social">
+      <h2 style="color: var(--mauve);">Welcome back!</h2>
+      <input id="handle" class="login-input" value="nandi.latha.org" placeholder="your-handle.bsky.social">
       <button onclick="startLogin()" class="login-btn">Log In</button>
     </div>
   </div>
@@ -83,35 +116,52 @@
     
     <div id="channel-sidebar">
       <div id="server-header">
-        <span id="current-server-name">...</span>
-        <button id="admin-tools" onclick="toggleAdminMenu()" style="display:none; background:none; border:none; color:#949ba4; cursor:pointer;">⚙</button>
+        <span id="current-server-name" style="color: var(--lavender);">...</span>
+        <button id="admin-tools" onclick="toggleAdminMenu()" style="display:none; background:none; border:none; color:var(--subtext0); cursor:pointer; font-size: 18px;">⚙</button>
       </div>
       
-      <div id="channel-list">
-        <!-- Channels injected here -->
-      </div>
+      <div id="channel-list"></div>
 
       <div id="user-info">
         <div id="user-handle">...</div>
-        <button onclick="logout()" style="background:none; border:none; color:#949ba4; cursor:pointer; font-size:12px;">Logout</button>
+        <button onclick="logout()" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:12px; font-weight:bold; margin-left: auto;">Logout</button>
       </div>
     </div>
 
     <div id="chat-area">
       <div id="chat-header">
         <span class="channel-hash">#</span>
-        <span id="current-channel-name">...</span>
+        <span id="current-channel-name" style="color: var(--text);">...</span>
       </div>
 
       <!-- Admin Menu Modal -->
       <div id="admin-menu" style="display:none">
-        <div class="admin-field">
-          <label class="admin-label">Server Name</label>
-          <input id="new-server-name" class="admin-input">
+        <div class="modal-card">
+          <div class="modal-close" onclick="toggleAdminMenu()">×</div>
+          <h2 style="margin-top:0; color: var(--blue);">Server Settings</h2>
+          <div class="admin-field">
+            <label class="admin-label">Server Name</label>
+            <input id="new-server-name" class="admin-input">
+          </div>
+          <button onclick="saveServerConfig()" class="admin-save-btn">Save Changes</button>
+          <hr style="border:0; border-top:1px solid var(--surface1); margin: 20px 0;">
+          <button onclick="addCategory()" class="admin-save-btn" style="background:var(--surface1); color: var(--text);">+ Add Category</button>
+          <button onclick="promptAddChannel()" class="admin-save-btn" style="background:var(--surface1); color: var(--text);">+ Add Channel</button>
         </div>
-        <button onclick="addCategory()" class="admin-save-btn" style="background:#5865f2; margin-bottom: 8px;">Add Category</button>
-        <button onclick="promptAddChannel()" class="admin-save-btn" style="background:#5865f2; margin-bottom: 16px;">Add Channel</button>
-        <button onclick="saveServerConfig()" class="admin-save-btn">Save Server Settings</button>
+      </div>
+
+      <!-- Client Settings Modal -->
+      <div id="client-settings-modal" style="display:none">
+        <div class="modal-card">
+          <div class="modal-close" onclick="toggleClientSettings()">×</div>
+          <h2 style="margin-top:0; color: var(--green);">Server Connections</h2>
+          <p style="color:var(--subtext0); font-size:14px;">Enter the URLs of the backend workers you want to connect to (one per line).</p>
+          <div class="admin-field">
+            <label class="admin-label">Server URLs</label>
+            <textarea id="server-urls-input" class="admin-input" style="height:150px; font-family:monospace; resize:none;"></textarea>
+          </div>
+          <button onclick="saveClientSettings()" class="admin-save-btn" style="background:var(--green); color: var(--crust);">Apply & Restart</button>
+        </div>
       </div>
 
       <div id="message-list"></div>
