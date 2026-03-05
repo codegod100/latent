@@ -17,6 +17,7 @@ let currentChannel: any = null
 let currentUserHandle: string | null = null
 let currentUserDid: string | null = null
 let currentMessages: any[] = []
+let replyToMessage: any = null
 let ws: WebSocket | null = null
 
 const client = new BrowserOAuthClient({
@@ -37,8 +38,7 @@ const log = (m: string, obj?: any) => {
 }
 
 const loadMsg = (msg: string) => {
-  const el = document.getElementById('load-msg')
-  if (el) el.textContent = msg
+  const el = document.getElementById('load-msg'); if (el) el.textContent = msg
 }
 
 function setLoading(selector: string, isLoading: boolean, text: string | null = null) {
@@ -76,10 +76,9 @@ function setupWebSocket() {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'new_message') {
-        const existingIdx = currentMessages.findIndex(m => m.id === data.message.id);
+        const existingIdx = currentMessages.findIndex(m => m.id === data.message.id || (m.optimistic && m.clientId === data.message.clientId));
         if (existingIdx !== -1) {
-          // Replace optimistic message with authoritative one
-          currentMessages[existingIdx] = data.message;
+          currentMessages[existingIdx] = { ...data.message, optimistic: false };
         } else {
           currentMessages.unshift(data.message);
         }
@@ -88,6 +87,12 @@ function setupWebSocket() {
         const idx = currentMessages.findIndex(m => m.id === data.message.id);
         if (idx !== -1) {
           currentMessages[idx] = data.message;
+          renderMessages();
+        }
+      } else if (data.type === 'reaction_update') {
+        const idx = currentMessages.findIndex(m => m.id === data.messageId);
+        if (idx !== -1) {
+          currentMessages[idx].reactions = data.reactions;
           renderMessages();
         }
       }
@@ -259,25 +264,85 @@ async function refreshMessages() {
 
 function renderMessages() {
   const container = document.getElementById('message-list')!
-  container.innerHTML = currentMessages.length === 0 ? '<div style="padding:1rem; color:#949ba4;"><em>No messages.</em></div>' :
-    currentMessages.map((m: any) => `
+  if (currentMessages.length === 0) { container.innerHTML = '<div style="padding:1rem; color:#949ba4;"><em>No messages.</em></div>'; return }
+  
+  container.innerHTML = currentMessages.map((m: any) => {
+    // Reaction summary
+    const reactionCounts = (m.reactions || []).reduce((acc: any, r: any) => {
+      acc[r.emoji] = (acc[r.emoji] || 0) + 1; return acc
+    }, {});
+    const myReactions = (m.reactions || []).filter((r: any) => r.did === currentUserDid).map((r: any) => r.emoji);
+    
+    const reactionHtml = Object.entries(reactionCounts).map(([emoji, count]) => `
+      <div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" onclick="window.toggleReaction('${m.id}', '${emoji}')">
+        <span>${emoji}</span><span class="reaction-count">${count}</span>
+      </div>
+    `).join('');
+
+    const parentMsg = m.parent_id ? currentMessages.find(p => p.id === m.parent_id) : null;
+
+    return `
       <div class="msg-item" id="msg-${m.id}">
+        ${parentMsg ? `<div class="msg-reply-to" onclick="document.getElementById('msg-${parentMsg.id}').scrollIntoView({behavior:'smooth'})">Replying to @${parentMsg.handle}</div>` : ''}
+        <div class="msg-actions">
+          <div class="action-btn" onclick="window.replyTo('${m.id}')" title="Reply">↩</div>
+          <div class="action-btn" onclick="window.toggleReaction('${m.id}', '👍')" title="Thumbs Up">👍</div>
+          <div class="action-btn" onclick="window.toggleReaction('${m.id}', '❤️')" title="Love">❤️</div>
+          <div class="action-btn" onclick="window.toggleReaction('${m.id}', '🔥')" title="Fire">🔥</div>
+          ${m.did === currentUserDid ? `<div class="action-btn" onclick="window.enterEditMode('${m.id}')" title="Edit">✎</div>` : ''}
+        </div>
         <div class="msg-header">
           <span class="msg-author">@${m.handle}</span>
           <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
-          ${m.did === currentUserDid ? `<span class="edit-link" onclick="window.enterEditMode('${m.id}')">edit</span>` : ''}
         </div>
         <div class="msg-content" id="msg-content-${m.id}" style="${m.optimistic ? 'opacity: 0.5;' : ''}">${linkify(m.content)}</div>
+        <div class="reactions-list">${reactionHtml}</div>
       </div>
-    `).reverse().join('')
+    `
+  }).reverse().join('')
   container.scrollTop = container.scrollHeight
 }
 
-// --- MOBILE HELPERS ---
+// --- REACTIONS & REPLIES ---
+(window as any).toggleReaction = async (messageId: string, emoji: string) => {
+  const session = (window as any).atprotoSession; if (!session) return
+  const msg = currentMessages.find(m => m.id === messageId); if (!msg) return
+  const isRemoving = (msg.reactions || []).some((r: any) => r.did === currentUserDid && r.emoji === emoji)
+  
+  const endpoint = isRemoving ? '/api/unreact' : '/api/react'
+  const tokens = await session.getTokenSet(); const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
+  const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
+  
+  const submit = async (nonce: string | null = null) => {
+    const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
+    const res = await fetch(`${currentServer.url}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messageId, emoji, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
+    })
+    const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce)
+    // WS will update UI
+  }
+  await submit()
+};
+
+(window as any).replyTo = (id: string) => {
+  const msg = currentMessages.find(m => m.id === id); if (!msg) return
+  replyToMessage = msg
+  document.getElementById('app-container')!.classList.add('is-replying')
+  document.getElementById('reply-bar')!.style.display = 'flex'
+  document.getElementById('reply-text')!.textContent = `Replying to @${msg.handle}`
+  document.getElementById('message-input')!.focus()
+};
+
+(window as any).cancelReply = () => {
+  replyToMessage = null
+  document.getElementById('app-container')!.classList.remove('is-replying')
+  document.getElementById('reply-bar')!.style.display = 'none'
+};
+
+// --- REST OF HELPERS ---
 (window as any).toggleMenu = (open: boolean) => {
-  const container = document.getElementById('app-container')!
-  if (open) container.classList.add('menu-open')
-  else container.classList.remove('menu-open')
+  const container = document.getElementById('app-container')!; if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open')
 };
 
 (window as any).selectServer = (host: string) => {
@@ -297,7 +362,6 @@ function renderMessages() {
   }
 };
 
-// --- ACTIONS ---
 (window as any).enterEditMode = (id: string) => {
   const contentEl = document.getElementById(`msg-content-${id}`)!
   const original = contentEl.textContent!
@@ -403,24 +467,17 @@ async function adminFetch(endpoint: string, method: string, body: any) {
 (window as any).submitMessage = async () => {
   const session = (window as any).atprotoSession; if (!session || !currentChannel) return
   const input = document.getElementById('message-input') as HTMLInputElement; const content = input.value.trim(); if (!content) return
-  
-  // OPTIMISTIC UI
   const tempId = 'opt-' + Math.random().toString(36).substr(2, 9)
-  const optMsg = { id: tempId, did: currentUserDid, handle: currentUserHandle, content, channel_id: currentChannel.id, created_at: new Date().toISOString(), optimistic: true }
-  currentMessages.unshift(optMsg); renderMessages()
-  
+  const optMsg = { id: tempId, did: currentUserDid, handle: currentUserHandle, content, channel_id: currentChannel.id, parent_id: replyToMessage?.id || null, created_at: new Date().toISOString(), optimistic: true, reactions: [] }
+  currentMessages.unshift(optMsg); renderMessages(); (window as any).cancelReply()
   input.value = ''; const tokens = await session.getTokenSet(); const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
   const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
-    const res = await fetch(`${currentServer.url}/api/submit-message`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, content, channelId: currentChannel.id }) })
+    const res = await fetch(`${currentServer.url}/api/submit-message`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, content, channelId: currentChannel.id, clientId: tempId, parentId: optMsg.parent_id }) })
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce)
-    // Authoritative message will come via WebSocket or we could replace it here if no WS
-    if (!res.ok) {
-      log('Submission failed, removing optimistic message')
-      currentMessages = currentMessages.filter(m => m.id !== tempId)
-      renderMessages(); alert('Failed to send message.')
-    }
+    if (res.ok && data.id) { const optIdx = currentMessages.findIndex(m => m.id === tempId); if (optIdx !== -1) currentMessages[optIdx].id = data.id }
+    else if (!res.ok) { currentMessages = currentMessages.filter(m => m.id !== tempId); renderMessages(); alert('Failed to send.') }
   }
   await submit()
 }

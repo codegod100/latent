@@ -31,8 +31,6 @@
     }
 
     body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text); height: 100vh; height: 100dvh; overflow: hidden; }
-    
-    /* Scrollbar Styling */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: var(--base); }
     ::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 4px; }
@@ -41,16 +39,13 @@
 
     #app-container { display: none; height: 100vh; height: 100dvh; width: 100vw; flex-direction: row; position: relative; overflow: hidden; }
     
-    /* Server Sidebar */
     #server-sidebar { width: 72px; background: var(--crust); display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; flex-shrink: 0; border-right: 1px solid var(--mantle); z-index: 100; transition: transform 0.3s ease; height: 100%; }
     .server-icon { width: 48px; height: 48px; border-radius: 50%; background: var(--surface0); color: var(--text); display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; transition: all 0.2s; position: relative; flex-shrink: 0; }
     .server-icon:hover, .server-icon.active { border-radius: 16px; background: var(--blue); color: var(--crust); }
     .server-icon.active::before { content: ""; position: absolute; left: -12px; height: 40px; width: 4px; background: var(--text); border-radius: 0 4px 4px 0; }
     .server-icon.add-server { color: var(--green); }
     .server-icon.offline { opacity: 0.4; filter: grayscale(1); border: 1px dashed var(--red); }
-    .server-icon.offline:hover { opacity: 0.8; filter: none; border-style: solid; }
 
-    /* Channel Sidebar */
     #channel-sidebar { width: 240px; background: var(--mantle); display: flex; flex-direction: column; flex-shrink: 0; z-index: 95; transition: transform 0.3s ease; height: 100%; }
     #server-header { height: 48px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--crust); font-weight: bold; flex-shrink: 0; }
     #channel-list { flex-grow: 1; overflow-y: auto; padding: 12px 8px; }
@@ -62,48 +57,57 @@
     .channel-item:hover, .channel-item.active { background: var(--surface1); color: white; }
     .channel-hash { color: var(--surface2); margin-right: 6px; font-size: 1.2rem; }
     .add-icon, .delete-icon { margin-left: auto; cursor: pointer; font-size: 14px; padding: 0 4px; opacity: 0.6; }
-    .add-icon:hover, .delete-icon:hover { opacity: 1; color: white; }
 
-    /* Main Chat Area */
     #chat-area { flex-grow: 1; display: flex; flex-direction: column; background: var(--base); position: relative; width: 100%; min-width: 0; height: 100%; }
     #chat-header { height: 48px; padding: 0 12px; display: flex; align-items: center; border-bottom: 1px solid var(--mantle); font-weight: bold; gap: 8px; flex-shrink: 0; }
     #message-list { flex-grow: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+    
     #input-area { padding: 0 16px 24px 16px; flex-shrink: 0; }
+    #reply-bar { display: none; background: var(--surface0); padding: 8px 12px; border-radius: 8px 8px 0 0; border-bottom: 1px solid var(--surface1); align-items: center; justify-content: space-between; font-size: 13px; }
     #message-input { width: 100%; padding: 12px; background: var(--surface0); border: none; border-radius: 8px; color: var(--text); font-size: 16px; box-sizing: border-box; }
-    #message-input:focus { outline: 1px solid var(--lavender); }
+    #app-container:not(.is-replying) #message-input { border-radius: 8px; }
+    #app-container.is-replying #message-input { border-radius: 0 0 8px 8px; }
 
-    .msg-item { display: flex; flex-direction: column; gap: 2px; }
+    .msg-item { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; border-radius: 4px; transition: background 0.1s; position: relative; }
+    .msg-item:hover { background: rgba(255,255,255,0.02); }
     .msg-header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .msg-author { color: var(--pink); font-weight: 600; }
     .msg-date { color: var(--subtext0); font-size: 0.7rem; }
     .msg-content { color: var(--text); line-height: 1.375; word-break: break-word; }
-    .edit-link { color: var(--blue); font-size: 10px; cursor: pointer; margin-left: 8px; opacity: 0.6; }
-    .edit-link:hover { opacity: 1; text-decoration: underline; }
     
-    /* Inline Editing Styles */
+    .msg-reply-to { font-size: 12px; color: var(--blue); margin-bottom: -2px; display: flex; align-items: center; gap: 4px; opacity: 0.8; }
+    .msg-reply-to::before { content: "┌"; margin-top: 4px; }
+
+    .msg-actions { position: absolute; right: 8px; top: -12px; background: var(--surface0); border: 1px solid var(--surface1); border-radius: 4px; display: none; gap: 4px; padding: 2px 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 10; }
+    .msg-item:hover .msg-actions { display: flex; }
+    .action-btn { cursor: pointer; padding: 2px 4px; border-radius: 2px; font-size: 14px; }
+    .action-btn:hover { background: var(--surface1); }
+
+    .reactions-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .reaction-chip { background: var(--surface0); border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.1s; }
+    .reaction-chip:hover { border-color: var(--surface2); }
+    .reaction-chip.active { background: rgba(137, 180, 250, 0.1); border-color: var(--blue); }
+    .reaction-count { color: var(--subtext0); font-size: 11px; }
+    .reaction-chip.active .reaction-count { color: var(--blue); }
+
+    .edit-link { color: var(--blue); font-size: 10px; cursor: pointer; margin-left: 8px; opacity: 0.6; }
     .edit-input { width: 100%; padding: 8px; background: var(--surface0); border: 1px solid var(--blue); border-radius: 4px; color: var(--text); margin-top: 4px; box-sizing: border-box; }
     .edit-actions { display: flex; gap: 8px; margin-top: 4px; font-size: 12px; }
-    .edit-save { color: var(--green); background: none; border: none; cursor: pointer; padding: 0; font-weight: bold; }
-    .edit-cancel { color: var(--red); background: none; border: none; cursor: pointer; padding: 0; }
+    .edit-save { color: var(--green); background: none; border: none; cursor: pointer; font-weight: bold; }
+    .edit-cancel { color: var(--red); background: none; border: none; cursor: pointer; }
 
-    /* Loading States */
-    .loading-overlay { opacity: 0.5; pointer-events: none; transition: opacity 0.2s; }
-    .btn-loading { cursor: wait !important; opacity: 0.7; }
-    .inline-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: white; animation: spin 1s ease-in-out infinite; margin-right: 6px; vertical-align: middle; }
+    .loading-overlay { opacity: 0.5; pointer-events: none; }
     .big-spinner { border: 4px solid var(--surface0); border-top: 4px solid var(--blue); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--subtext0); }
 
-    /* Mobile UI */
-    #mobile-menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; padding: 0; }
+    #mobile-menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; }
     #mobile-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5); z-index: 90; }
 
-    /* Modals / Menus */
     #admin-menu, #client-settings-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 500; padding: 20px; }
     .modal-card { background: var(--mantle); width: 100%; max-width: 440px; border-radius: 8px; padding: 24px; border: 1px solid var(--surface0); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
     .admin-input { width: 100%; padding: 12px; background: var(--base); border: 1px solid var(--surface0); border-radius: 4px; color: var(--text); box-sizing: border-box; font-size: 16px; }
     .admin-save-btn { width: 100%; padding: 12px; background: var(--blue); color: var(--crust); border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 12px; }
-    .admin-save-btn:hover { filter: brightness(1.1); }
 
     #login-panel, #loading-panel { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--base); z-index: 1000; }
     .login-card { background: var(--mantle); padding: 32px; border-radius: 8px; width: 90%; max-width: 400px; text-align: center; border: 1px solid var(--surface0); }
@@ -111,17 +115,12 @@
     #user-info { margin-top: auto; padding: 12px; background: var(--crust); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
     #user-handle { font-size: 0.8rem; font-weight: bold; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    /* RESPONSIVE */
     @media (max-width: 768px) {
       #mobile-menu-btn { display: block; }
       #server-sidebar { position: absolute; left: 0; top: 0; bottom: 0; transform: translateX(-100%); z-index: 110; }
       #channel-sidebar { position: absolute; left: 72px; top: 0; bottom: 0; transform: translateX(-150%); width: calc(100% - 100px); max-width: 280px; z-index: 105; }
-      
-      #app-container.menu-open #server-sidebar { transform: translateX(0); }
-      #app-container.menu-open #channel-sidebar { transform: translateX(0); }
+      #app-container.menu-open #server-sidebar, #app-container.menu-open #channel-sidebar { transform: translateX(0); }
       #app-container.menu-open #mobile-overlay { display: block; }
-      
-      .msg-item { gap: 4px; }
       #input-area { padding: 0 8px 12px 8px; }
     }
   </style>
@@ -146,9 +145,7 @@
 
   <div id="app-container">
     <div id="mobile-overlay" onclick="toggleMenu(false)"></div>
-    
     <div id="server-sidebar"></div>
-    
     <div id="channel-sidebar">
       <div id="server-header">
         <span id="current-server-name" style="color: var(--lavender);">...</span>
@@ -169,7 +166,12 @@
       </div>
 
       <div id="message-list"></div>
+      
       <div id="input-area">
+        <div id="reply-bar">
+          <span id="reply-text">Replying to @user</span>
+          <span style="cursor:pointer;" onclick="window.cancelReply()">×</span>
+        </div>
         <input id="message-input" placeholder="Message" autocomplete="off">
       </div>
 

@@ -740,7 +740,24 @@ var SCHEMA = `
   CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
   CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);
   CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0);
-  CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY, 
+    did TEXT NOT NULL, 
+    handle TEXT NOT NULL, 
+    content TEXT NOT NULL, 
+    channel_id TEXT, 
+    parent_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS reactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL,
+    did TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(message_id, did, emoji)
+  );
 `;
 var D1Storage = class {
   constructor(db) {
@@ -753,6 +770,10 @@ var D1Storage = class {
     await this.db.exec(SCHEMA);
     try {
       await this.db.prepare("ALTER TABLE messages ADD COLUMN channel_id TEXT").run();
+    } catch (e) {
+    }
+    try {
+      await this.db.prepare("ALTER TABLE messages ADD COLUMN parent_id TEXT").run();
     } catch (e) {
     }
   }
@@ -784,8 +805,8 @@ var D1Storage = class {
   async listMessages(channelId) {
     return (await this.db.prepare("SELECT * FROM messages WHERE channel_id = ? OR (channel_id IS NULL AND ? IS NULL) ORDER BY id DESC LIMIT 50").bind(channelId, channelId).all()).results;
   }
-  async addMessage(id, did, handle, content, channelId) {
-    await this.db.prepare("INSERT INTO messages (id, did, handle, content, channel_id) VALUES (?, ?, ?, ?, ?)").bind(id, did, handle, content, channelId).run();
+  async addMessage(id, did, handle, content, channelId, parentId = null) {
+    await this.db.prepare("INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)").bind(id, did, handle, content, channelId, parentId).run();
   }
   async getMessage(id) {
     return await this.db.prepare("SELECT * FROM messages WHERE id = ?").bind(id).first();
@@ -793,6 +814,17 @@ var D1Storage = class {
   async updateMessage(id, did, content) {
     const res = await this.db.prepare("UPDATE messages SET content = ? WHERE id = ? AND did = ?").bind(content, id, did).run();
     return res.meta.changes > 0;
+  }
+  async addReaction(messageId, did, handle, emoji) {
+    await this.db.prepare("INSERT OR IGNORE INTO reactions (message_id, did, handle, emoji) VALUES (?, ?, ?, ?)").bind(messageId, did, handle, emoji).run();
+  }
+  async removeReaction(messageId, did, emoji) {
+    await this.db.prepare("DELETE FROM reactions WHERE message_id = ? AND did = ? AND emoji = ?").bind(messageId, did, emoji).run();
+  }
+  async listReactions(messageIds) {
+    if (messageIds.length === 0) return [];
+    const placeholders = messageIds.map(() => "?").join(",");
+    return (await this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).bind(...messageIds).all()).results;
   }
 };
 
@@ -932,15 +964,11 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const { accessToken, dpopProof, pdsUrl, did } = body;
       const cacheKey = `${did}:${accessToken}`;
       const cached = identityCache.get(cacheKey);
-      if (cached && cached.expires > Date.now()) {
-        return cached.profile;
-      }
+      if (cached && cached.expires > Date.now()) return cached.profile;
       const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
       const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
       const dpopNonce = pdsRes.headers.get("dpop-nonce");
-      if (!pdsRes.ok) {
-        throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: "Identity verification failed" };
-      }
+      if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: "Identity verification failed" };
       const profile = await pdsRes.json();
       identityCache.set(cacheKey, { profile, expires: Date.now() + CACHE_TTL });
       return profile;
@@ -970,14 +998,14 @@ async function handleRequest(request, storage, configSeed2, notifier) {
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (Optimized Logic)</strong></p>
+          <p>Status: <strong>Active (latent-core)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
     }
     if (url.pathname === "/api/ws") {
       if (request.headers.get("Upgrade") !== "websocket") return new Response("Expected WebSocket upgrade", { status: 400 });
-      if (!notifier) return new Response("WebSockets not supported on this node", { status: 501 });
+      if (!notifier) return new Response("WebSockets not supported", { status: 501 });
       return new Response(null, { status: 101, headers: { "Upgrade": "websocket", "Connection": "Upgrade" } });
     }
     if (url.pathname === "/api/meta") {
@@ -1027,15 +1055,21 @@ async function handleRequest(request, storage, configSeed2, notifier) {
     if (url.pathname === "/api/messages" && request.method === "GET") {
       const channelId = url.searchParams.get("channelId");
       const messages = await storage.listMessages(channelId);
-      return new Response(JSON.stringify(messages), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
+      const messageIds = messages.map((m) => m.id);
+      const allReactions = await storage.listReactions(messageIds);
+      const messagesWithReactions = messages.map((m) => ({
+        ...m,
+        reactions: allReactions.filter((r) => r.message_id === m.id)
+      }));
+      return new Response(JSON.stringify(messagesWithReactions), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
     }
     if (url.pathname === "/api/submit-message" && request.method === "POST") {
       const body = await request.json();
       const profile = await verifyIdentity(body);
-      const { did, content, channelId } = body;
+      const { did, content, channelId, clientId, parentId } = body;
       const msgId = ulid();
-      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, created_at: (/* @__PURE__ */ new Date()).toISOString() };
-      await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
+      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: (/* @__PURE__ */ new Date()).toISOString(), clientId, reactions: [] };
+      await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id, msg.parent_id);
       if (notifier) await notifier.broadcast(msg.channel_id, { type: "new_message", message: msg });
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
@@ -1044,19 +1078,42 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const profile = await verifyIdentity(body);
       const { id, content, did } = body;
       const success = await storage.updateMessage(id, did, content);
-      if (!success) throw { status: 403, error: "Unauthorized or message not found" };
+      if (!success) throw { status: 403, error: "Unauthorized" };
       const msg = await storage.getMessage(id);
-      if (notifier && msg) await notifier.broadcast(msg.channel_id, { type: "edit_message", message: msg });
+      const allReactions = await storage.listReactions([id]);
+      const msgWithReactions = { ...msg, reactions: allReactions };
+      if (notifier) await notifier.broadcast(msg.channel_id, { type: "edit_message", message: msgWithReactions });
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
+    if (url.pathname === "/api/react" && request.method === "POST") {
+      const body = await request.json();
+      const profile = await verifyIdentity(body);
+      const { messageId, emoji, did } = body;
+      await storage.addReaction(messageId, did, profile.handle, emoji);
+      const msg = await storage.getMessage(messageId);
+      if (notifier && msg) {
+        const reactions = await storage.listReactions([messageId]);
+        notifier.broadcast(msg.channel_id, { type: "reaction_update", messageId, reactions });
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
+    if (url.pathname === "/api/unreact" && request.method === "POST") {
+      const body = await request.json();
+      const profile = await verifyIdentity(body);
+      const { messageId, emoji, did } = body;
+      await storage.removeReaction(messageId, did, emoji);
+      const msg = await storage.getMessage(messageId);
+      if (notifier && msg) {
+        const reactions = await storage.listReactions([messageId]);
+        notifier.broadcast(msg.channel_id, { type: "reaction_update", messageId, reactions });
+      }
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
     return new Response("Not Found", { status: 404, headers });
   } catch (err) {
     const status = err.status === 401 ? 200 : err.status || 500;
     const errorBody = err instanceof Error ? { error: err.message, stack: err.stack } : err;
-    return new Response(JSON.stringify(errorBody), {
-      status,
-      headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" }
-    });
+    return new Response(JSON.stringify(errorBody), { status, headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" } });
   }
 }
 __name(handleRequest, "handleRequest");
