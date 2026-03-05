@@ -199,7 +199,10 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) input.value = ''
+  if (input) {
+    input.value = ''
+    input.focus()
+  }
   document.getElementById('search-results')!.style.display = 'none'
   document.getElementById('clear-search')!.style.display = 'none'
 };
