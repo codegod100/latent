@@ -3,7 +3,8 @@ import { BrowserOAuthClient } from '@atproto/oauth-client-browser'
 // --- CONFIG ---
 const PORT = 3010
 const APP_ORIGIN = `http://127.0.0.1:${PORT}`
-const CLIENT_ID = `http://localhost/?redirect_uri=${encodeURIComponent(APP_ORIGIN + '/')}&scope=atproto%20transition:generic`
+const REDIRECT_URI = `${APP_ORIGIN}/`
+const CLIENT_ID = `http://localhost/?redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=atproto%20transition:generic`
 
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
@@ -16,6 +17,7 @@ const client = new BrowserOAuthClient({
 })
 
 const logEl = document.getElementById('console') as HTMLPreElement
+const listEl = document.getElementById('message-list') as HTMLDivElement
 const log = (m: string, obj?: any) => {
   let line = m
   if (obj instanceof Error) {
@@ -35,8 +37,28 @@ async function init() {
     } else {
       log('No session found.')
     }
+    refreshMessages()
   } catch (err) {
     log('Init failed', err)
+  }
+}
+
+async function refreshMessages() {
+  try {
+    const res = await fetch('/api/messages')
+    const messages = await res.json()
+    if (messages.length === 0) {
+      listEl.innerHTML = '<em>No messages yet.</em>'
+      return
+    }
+    listEl.innerHTML = messages.map((m: any) => `
+      <div class="msg-item">
+        <span class="msg-author">@${m.handle}</span>: ${m.content}
+        <div class="msg-date">${new Date(m.created_at).toLocaleString()}</div>
+      </div>
+    `).join('')
+  } catch (e) {
+    log('Failed to load messages', e)
   }
 }
 
@@ -44,7 +66,18 @@ function showApp(session: any) {
   (window as any).atprotoSession = session
   document.getElementById('login-panel')!.style.display = 'none'
   document.getElementById('app-panel')!.style.display = 'block'
-  document.getElementById('user-did')!.textContent = session.did
+  document.getElementById('user-handle')!.textContent = session.did // Placeholder until profile load
+  
+  // Try to get handle for UI
+  session.getTokenSet().then(async (tokens: any) => {
+    const pdsUrl = tokens.aud.replace(/\/+$/, '')
+    const res = await fetch(`${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`, {
+      headers: { 'Authorization': `Bearer ${tokens.access_token}` } // Simple bearer for UI info
+    })
+    const profile = await res.json()
+    if (profile.handle) document.getElementById('user-handle')!.textContent = `@${profile.handle}`
+  })
+
   log('Session active for ' + session.did)
 }
 
@@ -54,80 +87,78 @@ function showApp(session: any) {
   await client.signIn(handle)
 };
 
-(window as any).verifyWithExternalServer = async () => {
+(window as any).submitMessage = async () => {
   const session = (window as any).atprotoSession
   if (!session) return alert('Not logged in')
 
-  log('Signing verification proof via library...')
-  
+  const input = document.getElementById('message-input') as HTMLInputElement
+  const content = input.value.trim()
+  if (!content) return alert('Type something first')
+
+  const btn = document.getElementById('submit-btn') as HTMLButtonElement
+  btn.disabled = true
+  log('Submitting identity-verified message...')
+
   try {
-    const pdsUrl = session.serverMetadata.issuer
+    const tokens = await session.getTokenSet()
+    const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
     const did = session.did
     const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${did}`
 
-    // THE CANONICAL WAY: Use the session's internal key to sign a proof
-    const verifyRelay = async (nonce: string | null = null) => {
-      const tokenSet = await (session as any).getTokenSet('auto')
-      const key = (session as any).server.dpopKey
-      
-      // Determine the PDS URL (Resource Server). tokenSet.aud is usually the PDS.
-      const pdsUrl = String(tokenSet.aud).replace(/\/+$/, '')
-      const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
-
-      log('Probing Resource Server (PDS): ' + pdsUrl)
-      
-      // Calculate Access Token Hash (ath)
-      // WebCrypto subtle digest returns ArrayBuffer
-      const accessTokenBytes = new TextEncoder().encode(tokenSet.access_token)
+    const submit = async (nonce: string | null = null) => {
+      // 1. Generate DPoP proof specifically for the verification URL
+      const accessTokenBytes = new TextEncoder().encode(tokens.access_token)
       const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
-      const hashArray = new Uint8Array(hashBuffer)
-      
-      // Base64url encode the hash
-      const b64 = (arr: Uint8Array) => btoa(String.fromCharCode(...arr)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-      const ath = b64(hashArray)
+      const ath = btoa(String.fromCharCode(...new Uint8Array(hashBuffer))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 
-      // Get canonical JWK for thumbprint consistency
-      const pub = key.bareJwk
-      const jwk = { crv: pub.crv, kty: pub.kty, x: pub.x, y: pub.y }
+      const key = session.server.dpopKey
       const alg = key.algorithms.find((a: string) => a.startsWith('ES') || a.startsWith('RS')) || 'ES256'
-
+      const pub = key.bareJwk
+      
       const dpopProof = await key.createJwt(
-        { alg, typ: 'dpop+jwt', jwk },
+        { alg, typ: 'dpop+jwt', jwk: { crv: pub.crv, kty: pub.kty, x: pub.x, y: pub.y } },
         {
           iat: Math.floor(Date.now() / 1000),
           jti: crypto.randomUUID(),
           htm: 'GET',
-          htu: probeUrl.split('?')[0].split('#')[0],
+          htu: probeUrl,
           ath,
           nonce
         }
       )
 
-      const res = await fetch('/api/external-verify', {
+      // 2. Send to our endpoint
+      const res = await fetch('/api/submit-message', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          accessToken: tokenSet.access_token,
-          dpopProof,
-          pdsUrl,
-          did: session.did
-        })
+        body: JSON.stringify({ accessToken: tokens.access_token, dpopProof, pdsUrl, did, content })
       })
 
       const data = await res.json()
-      
+
       if (!res.ok && data.dpopNonce) {
-        log('Challenge: Nonce received, retrying with library...')
-        return verifyRelay(data.dpopNonce)
+        log('Challenge: Nonce received during submission, retrying...')
+        return submit(data.dpopNonce)
       }
 
-      log('Backend Result:', data)
+      if (res.ok) {
+        log('Message stored successfully!', data)
+        input.value = ''
+        refreshMessages()
+      } else {
+        log('Submission failed', data)
+      }
     }
 
-    await verifyRelay()
+    await submit()
   } catch (err) {
-    log('Verification error', err)
+    log('Submission error', err)
+  } finally {
+    btn.disabled = false
   }
 }
+
+// Wire up the button
+document.getElementById('submit-btn')!.onclick = (window as any).submitMessage
 
 init()

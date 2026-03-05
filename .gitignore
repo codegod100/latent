@@ -33,6 +33,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Persistent storage
 sessions.json
 states.json
+data.db
 
 # Finder (MacOS) folder config
 .DS_Store
