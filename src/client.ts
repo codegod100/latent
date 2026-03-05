@@ -2,16 +2,19 @@ import { BrowserOAuthClient } from '@atproto/oauth-client-browser'
 
 // --- CONFIG ---
 const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-const HOSTNAME = window.location.hostname
+const HOSTNAME = IS_LOCAL ? '127.0.0.1' : window.location.hostname
 
-const SERVERS = [
-  { id: 'main', name: 'General Server', url: IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev` },
-  { id: 'alt', name: 'Alternate Reality', url: IS_LOCAL ? `http://${HOSTNAME}:8788` : `https://latent-server-alt.veronika-m-winters.workers.dev` }
+const SERVER_URLS = [
+  IS_LOCAL ? `http://${HOSTNAME}:8787` : `https://latent-server.veronika-m-winters.workers.dev`,
+  IS_LOCAL ? `http://${HOSTNAME}:8788` : `https://latent-server-alt.veronika-m-winters.workers.dev`
 ]
 
-let currentServer = SERVERS[0]
+let SERVERS: any[] = []
+let currentServer: any = null
+let currentChannel: any = null
+let currentUserHandle: string | null = null
 
-const CLIENT_URL = window.location.origin
+const CLIENT_URL = IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin
 const CLIENT_ID = IS_LOCAL 
   ? `http://localhost/?redirect_uri=${encodeURIComponent(CLIENT_URL + '/')}&scope=atproto%20transition:generic`
   : `${CLIENT_URL}/client-metadata.json`
@@ -26,37 +29,88 @@ const client = new BrowserOAuthClient({
   }
 })
 
-const logEl = document.getElementById('console') as HTMLPreElement
-const listEl = document.getElementById('message-list') as HTMLDivElement
 const log = (m: string, obj?: any) => {
   let line = m
-  if (obj instanceof Error) {
-    line = `${m}: ${obj.message}\n${obj.stack}`
-  } else if (obj) {
-    line = `${m} ${JSON.stringify(obj, null, 2)}`
-  }
-  logEl.textContent = `[${new Date().toLocaleTimeString()}] ${line}\n${logEl.textContent}`
+  if (obj instanceof Error) line = `${m}: ${obj.message}\n${obj.stack}`
+  else if (obj) line = `${m} ${JSON.stringify(obj, null, 2)}`
+  console.log(`[${new Date().toLocaleTimeString()}] ${line}`)
+}
+
+// --- CRYPTO HELPER ---
+const getDpopProof = async (session: any, method: string, url: string, nonce: string | null = null) => {
+  const tokens = await session.getTokenSet()
+  const key = (session as any).server.dpopKey
+  const pub = key.bareJwk
+  const jwk = { crv: pub.crv, kty: pub.kty, x: pub.x, y: pub.y }
+  const alg = key.algorithms.find((a: any) => a.startsWith('ES')) || 'ES256'
+
+  const accessTokenBytes = new TextEncoder().encode(tokens.access_token)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
+  const ath = btoa(String.fromCharCode(...new Uint8Array(hashBuffer))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+
+  return await key.createJwt(
+    { alg, typ: 'dpop+jwt', jwk },
+    {
+      iat: Math.floor(Date.now() / 1000),
+      jti: crypto.randomUUID(),
+      htm: method,
+      htu: url.split('?')[0].split('#')[0],
+      ath,
+      nonce
+    }
+  )
 }
 
 async function init() {
-  log('Initializing official library...')
   try {
+    SERVERS = await Promise.all(SERVER_URLS.map(async (url) => {
+      try {
+        const res = await fetch(`${url}/api/meta`)
+        const meta = await res.json()
+        return { ...meta, url, id: meta.id || url }
+      } catch (e) {
+        return { id: url, name: 'Offline Server', url, error: true, categories: [], channels: [] }
+      }
+    }))
+
+    currentServer = SERVERS[0]
+
     const result = await client.init()
     document.getElementById('loading-panel')!.style.display = 'none'
     
-    if (result?.session) {
-      showApp(result.session)
-    } else {
-      log('No session found.')
-      document.getElementById('login-panel')!.style.display = 'flex'
+    // PERMALINK: /<serverId>/<channelId>
+    const pathParts = window.location.pathname.split('/').filter(Boolean)
+    if (pathParts[0]) {
+      const server = SERVERS.find(s => s.id === pathParts[0])
+      if (server) {
+        currentServer = server
+        if (pathParts[1]) {
+          const chan = server.channels.find((c: any) => c.id === pathParts[1])
+          if (chan) currentChannel = chan
+        }
+      }
     }
-    renderServerList()
-    refreshMessages()
+
+    if (!currentChannel && currentServer.channels?.length > 0) {
+      currentChannel = currentServer.channels[0]
+    }
+
+    if (result?.session) await showApp(result.session)
+    else document.getElementById('login-panel')!.style.display = 'flex'
+    
+    renderAll()
   } catch (err) {
     log('Init failed', err)
-    document.getElementById('loading-panel')!.style.display = 'none'
-    document.getElementById('login-panel')!.style.display = 'flex'
   }
+}
+
+function renderAll() {
+  renderServerList()
+  renderChannelList()
+  document.getElementById('current-server-name')!.textContent = currentServer.name
+  document.getElementById('current-channel-name')!.textContent = currentChannel?.name || 'no-channel'
+  refreshMessages()
+  renderAdminUI()
 }
 
 function renderServerList() {
@@ -64,160 +118,239 @@ function renderServerList() {
   sidebar.innerHTML = SERVERS.map(s => `
     <div class="server-icon ${s.id === currentServer.id ? 'active' : ''}" 
          onclick="window.selectServer('${s.id}')" 
-         title="${s.name}">
-      ${s.name[0]}
-    </div>
+         title="${s.name}">${s.name[0]}</div>
   `).join('')
+}
+
+function renderChannelList() {
+  const list = document.getElementById('channel-list')!
+  if (!currentServer) return
+  
+  const categories = currentServer.categories || []
+  const channels = currentServer.channels || []
+
+  let html = ''
+  
+  // Uncategorized
+  const uncategorized = channels.filter((c: any) => !c.category_id)
+  uncategorized.forEach((c: any) => {
+    html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')">
+      <span class="channel-hash">#</span> ${c.name}
+      ${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}
+    </div>`
+  })
+
+  // Grouped by Category
+  categories.forEach((cat: any) => {
+    html += `<div class="category-item">
+      <span class="category-arrow">▼</span> ${cat.name}
+      ${isAdmin() ? `<span class="add-icon" onclick="event.stopPropagation();window.promptAddChannel('${cat.id}')">+</span>` : ''}
+      ${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteCategory('${cat.id}')">×</span>` : ''}
+    </div>`
+    const catChannels = channels.filter((c: any) => c.category_id === cat.id)
+    catChannels.forEach((c: any) => {
+      html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')">
+        <span class="channel-hash">#</span> ${c.name}
+        ${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}
+      </div>`
+    })
+  })
+
+  // Global actions for admin
+  if (isAdmin()) {
+    html += `<div class="category-item" onclick="window.addCategory()" style="cursor:pointer; margin-top:10px; color:#5865f2;">+ Add Category</div>`
+  }
+
+  list.innerHTML = html
 }
 
 (window as any).selectServer = (id: string) => {
   const server = SERVERS.find(s => s.id === id)
   if (server) {
     currentServer = server
-    log(`Switched to server: ${server.name}`)
-    document.getElementById('current-server-name')!.textContent = server.name
-    renderServerList()
-    refreshMessages()
+    currentChannel = server.channels?.[0] || null
+    window.history.pushState({}, '', `/${currentServer.id}${currentChannel ? '/' + currentChannel.id : ''}`)
+    renderAll()
+  }
+}
+
+(window as any).selectChannel = (id: string) => {
+  const chan = currentServer.channels.find((c: any) => c.id === id)
+  if (chan) {
+    currentChannel = chan
+    window.history.pushState({}, '', `/${currentServer.id}/${currentChannel.id}`)
+    renderAll()
   }
 }
 
 async function refreshMessages() {
-  listEl.innerHTML = '<div style="padding:1rem;">Loading messages from ' + currentServer.name + '...</div>'
+  const container = document.getElementById('message-list')!
+  if (!currentChannel) {
+    container.innerHTML = '<div style="padding:1rem;">Select a channel to start chatting.</div>'
+    return
+  }
   try {
-    const res = await fetch(`${currentServer.url}/api/messages`)
+    const res = await fetch(`${currentServer.url}/api/messages?channelId=${currentChannel.id}`)
     const messages = await res.json()
-    if (messages.length === 0) {
-      listEl.innerHTML = '<div style="padding:1rem;"><em>No messages in this server yet.</em></div>'
-      return
-    }
-    listEl.innerHTML = messages.map((m: any) => `
-      <div class="msg-item">
-        <div class="msg-header">
-          <span class="msg-author">@${m.handle}</span>
-          <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
+    container.innerHTML = messages.length === 0 ? '<div style="padding:1rem; color:#949ba4;"><em>No messages yet.</em></div>' :
+      messages.map((m: any) => `
+        <div class="msg-item">
+          <div class="msg-header">
+            <span class="msg-author">@${m.handle}</span>
+            <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
+          </div>
+          <div class="msg-content">${m.content}</div>
         </div>
-        <div class="msg-content">${m.content}</div>
-      </div>
-    `).join('')
-    listEl.scrollTop = listEl.scrollHeight
+      `).reverse().join('')
+    container.scrollTop = container.scrollHeight
   } catch (e) {
-    log(`Failed to load messages from ${currentServer.name}`, e)
-    listEl.innerHTML = '<div style="padding:1rem; color:red;">Failed to connect to server.</div>'
+    container.innerHTML = '<div style="padding:1rem; color:#f23f42;">Failed to connect to server.</div>'
   }
 }
 
-function showApp(session: any) {
+async function showApp(session: any) {
   (window as any).atprotoSession = session
   document.getElementById('login-panel')!.style.display = 'none'
   document.getElementById('app-container')!.style.display = 'flex'
-  document.getElementById('current-server-name')!.textContent = currentServer.name
-  // Try to get handle for UI using proper DPoP
-  session.getTokenSet().then(async (tokens: any) => {
+  
+  const fetchProfile = async (nonce: string | null = null) => {
     try {
+      const tokens = await session.getTokenSet()
       const pdsUrl = tokens.aud.replace(/\/+$/, '')
       const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
+      
+      const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
+      const res = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${tokens.access_token}`, 'DPoP': dpop } })
+      
+      if (res.status === 401) {
+        const nextNonce = res.headers.get('dpop-nonce')
+        if (nextNonce && !nonce) return fetchProfile(nextNonce)
+      }
 
-      const dpop = await session.createDPoPProof({
-        method: 'GET',
-        url: probeUrl
-      })
-
-      const res = await fetch(probeUrl, {
-        headers: { 
-          'Authorization': `DPoP ${tokens.access_token}`,
-          'DPoP': dpop
-        }
-      })
       const profile = await res.json()
-      if (profile.handle) document.getElementById('user-handle')!.textContent = `@${profile.handle}`
-    } catch (e) {
-      log('Failed to fetch profile for UI', e)
-    }
-  })
-
-  log('Session active for ' + session.did)
+      if (profile.handle) {
+        currentUserHandle = profile.handle
+        document.getElementById('user-handle')!.textContent = `@${profile.handle}`
+        renderAdminUI() 
+      }
+    } catch (e) { log('Profile fetch failed', e) }
+  }
+  await fetchProfile()
 }
 
-(window as any).startLogin = async () => {
-  const handle = (document.getElementById('handle') as HTMLInputElement).value
-  log('Starting login for ' + handle)
-  await client.signIn(handle)
-};
+const isAdmin = () => currentUserHandle && currentServer.adminHandle === currentUserHandle
 
-(window as any).logout = () => {
-  localStorage.clear()
-  location.href = '/'
-};
+function renderAdminUI() {
+  const adminBtn = document.getElementById('admin-tools')!
+  adminBtn.style.display = isAdmin() ? 'block' : 'none'
+}
 
-(window as any).submitMessage = async () => {
-  const session = (window as any).atprotoSession
-  if (!session) return alert('Not logged in')
-
-  const input = document.getElementById('message-input') as HTMLInputElement
-  const content = input.value.trim()
-  if (!content) return
-
-  input.value = ''
-  log(`Submitting message to ${currentServer.name}...`)
-
-  try {
-    const tokens = await session.getTokenSet()
-    const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
-    const did = session.did
-    const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${did}`
-
-    const submit = async (nonce: string | null = null) => {
-      const accessTokenBytes = new TextEncoder().encode(tokens.access_token)
-      const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
-      const ath = btoa(String.fromCharCode(...new Uint8Array(hashBuffer))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-
-      const key = (session as any).server.dpopKey
-      const alg = key.algorithms.find((a: string) => a.startsWith('ES') || a.startsWith('RS')) || 'ES256'
-      const pub = key.bareJwk
-      
-      const dpopProof = await key.createJwt(
-        { alg, typ: 'dpop+jwt', jwk: { crv: pub.crv, kty: pub.kty, x: pub.x, y: pub.y } },
-        {
-          iat: Math.floor(Date.now() / 1000),
-          jti: crypto.randomUUID(),
-          htm: 'GET',
-          htu: probeUrl,
-          ath,
-          nonce
-        }
-      )
-
-      const res = await fetch(`${currentServer.url}/api/submit-message`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ accessToken: tokens.access_token, dpopProof, pdsUrl, did, content })
-      })
-
-      const data = await res.json()
-
-      // Handle the "Soft Challenge" (Status was 200, but it's a nonce request)
-      if (data.isChallenge && data.dpopNonce) {
-        log('Nonce challenge received (handled silently)...')
-        return submit(data.dpopNonce)
-      }
-
-      if (res.ok && data.ok) {
-        log('Message stored in ' + currentServer.name)
-        refreshMessages()
-      } else {
-        log('Submission failed', data)
-      }
-    }
-
-    await submit()
-  } catch (err) {
-    log('Submission error', err)
+(window as any).toggleAdminMenu = () => {
+  const menu = document.getElementById('admin-menu')!
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none'
+  if (menu.style.display === 'block') {
+    (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer.name
   }
 }
 
-// Wire up Enter key
-document.getElementById('message-input')!.onkeydown = (e) => {
-  if (e.key === 'Enter') (window as any).submitMessage()
+// --- ADMIN ACTIONS ---
+async function adminFetch(endpoint: string, method: string, body: any) {
+  const session = (window as any).atprotoSession
+  const tokens = await session.getTokenSet()
+  const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
+  const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
+  
+  const submit = async (nonce: string | null = null) => {
+    const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
+    const res = await fetch(`${currentServer.url}${endpoint}`, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
+    })
+    const data = await res.json()
+    if (data.isChallenge) return submit(data.dpopNonce)
+    return { ok: res.ok, data }
+  }
+  return await submit()
 }
+
+(window as any).saveServerConfig = async () => {
+  const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim()
+  const res = await adminFetch('/api/meta', 'POST', { name })
+  if (res.ok) {
+    currentServer.name = name
+    renderAll()
+    document.getElementById('admin-menu')!.style.display = 'none'
+  }
+};
+
+(window as any).addCategory = async () => {
+  const name = prompt('Category Name:')
+  if (!name) return
+  const res = await adminFetch('/api/categories', 'POST', { name })
+  if (res.ok) {
+    currentServer.categories.push({ id: res.data.id, name })
+    renderChannelList()
+  }
+};
+
+(window as any).deleteCategory = async (id: string) => {
+  if (!confirm('Delete category?')) return
+  const res = await adminFetch(`/api/categories/${id}`, 'DELETE', {})
+  if (res.ok) {
+    currentServer.categories = currentServer.categories.filter((c: any) => c.id !== id)
+    renderChannelList()
+  }
+};
+
+(window as any).promptAddChannel = async (catId: string | null = null) => {
+  const name = prompt('Channel Name:')
+  if (!name) return
+  const res = await adminFetch('/api/channels', 'POST', { name, category_id: catId })
+  if (res.ok) {
+    currentServer.channels.push({ id: res.data.id, name, category_id: catId })
+    renderChannelList()
+  }
+};
+
+(window as any).deleteChannel = async (id: string) => {
+  if (!confirm('Delete channel?')) return
+  const res = await adminFetch(`/api/channels/${id}`, 'DELETE', {})
+  if (res.ok) {
+    currentServer.channels = currentServer.channels.filter((c: any) => c.id !== id)
+    if (currentChannel?.id === id) currentChannel = currentServer.channels[0] || null
+    renderAll()
+  }
+};
+
+(window as any).logout = () => { localStorage.clear(); location.href = '/' };
+
+(window as any).submitMessage = async () => {
+  const session = (window as any).atprotoSession
+  if (!session || !currentChannel) return
+  const input = document.getElementById('message-input') as HTMLInputElement
+  const content = input.value.trim()
+  if (!content) return
+  input.value = ''
+  
+  const tokens = await session.getTokenSet()
+  const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
+  const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
+
+  const submit = async (nonce: string | null = null) => {
+    const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
+    const res = await fetch(`${currentServer.url}/api/submit-message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, content, channelId: currentChannel.id })
+    })
+    const data = await res.json()
+    if (data.isChallenge) return submit(data.dpopNonce)
+    if (res.ok) refreshMessages()
+  }
+  await submit()
+}
+
+document.getElementById('message-input')!.onkeydown = (e) => { if (e.key === 'Enter') (window as any).submitMessage() }
 
 init()

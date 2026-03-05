@@ -1,176 +1,115 @@
 import express from 'express'
-import Database from 'better-sqlite3'
-import * as path from 'node:path'
 
 const PORT = 3010
 const APP_ORIGIN = `http://127.0.0.1:${PORT}`
 const REDIRECT_URI = `${APP_ORIGIN}/`
-const CLIENT_ID = `http://localhost/?redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=atproto%20transition:generic`
-
-// 1. DATABASE SETUP
-const db = new Database('data.db')
-db.exec(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    did TEXT NOT NULL,
-    handle TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`)
 
 const app = express()
 app.use(express.json())
+
+// Serve the bundled frontend
 app.use('/public', express.static('public'))
 
-// 2. STATELESS METADATA
+// 1. DYNAMIC METADATA (Required for various loopback origins)
 app.get('/client-metadata.json', (req, res) => {
+  const origin = req.get('origin') || `http://${req.get('host')}`
+  const redirectUri = `${origin}/`
+  const clientId = `${origin}/client-metadata.json`
+
   res.json({
-    client_id: CLIENT_ID,
-    client_name: 'Canonical Browser Client',
+    client_id: clientId,
+    client_name: 'Isolated ATProto Client',
     application_type: 'web',
     token_endpoint_auth_method: 'none',
     dpop_bound_access_tokens: true,
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
-    redirect_uris: [REDIRECT_URI],
-    scope: 'atproto transition:generic',
+    redirect_uris: [redirectUri],
+    scope: 'atproto transition:generic'
   })
 })
 
-// 3. SECURE MESSAGE SUBMISSION (Verification + Storage)
-app.post('/api/submit-message', async (req, res) => {
-  const { accessToken, dpopProof, pdsUrl, did, content } = req.body
+// 2. CATCH-ALL ROUTE (Serves index.html for all paths to support SPA routing/permalinks)
+app.get('*', (req, res) => {
+  // If it looks like an API call that missed, 404 it
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API endpoint not found' })
+  }
   
-  if (!content || String(content).trim().length === 0) {
-    return res.status(400).json({ error: 'Message content is required' })
-  }
-
-  try {
-    // A. Verify identity with PDS first
-    const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`
-    console.log('[external-server] Verifying identity for message storage: ' + probeUrl)
-    
-    const pdsRes = await fetch(probeUrl, {
-      headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof }
-    })
-    
-    const dpopNonce = pdsRes.headers.get('dpop-nonce')
-    
-    if (!pdsRes.ok) {
-      const errorData = await pdsRes.json()
-      return res.status(pdsRes.status).json({ 
-        verified: false, 
-        error: 'Identity verification failed', 
-        pdsResponse: errorData,
-        dpopNonce 
-      })
-    }
-
-    // B. Identity confirmed, get the handle
-    const profile = await pdsRes.json()
-    const handle = profile.handle || 'unknown'
-
-    // C. Store in SQLite
-    const stmt = db.prepare('INSERT INTO messages (did, handle, content) VALUES (?, ?, ?)')
-    const info = stmt.run(did, handle, content)
-
-    console.log(`[external-server] Message stored for @${handle} (id: ${info.lastInsertRowid})`)
-
-    res.json({
-      verified: true,
-      message_id: info.lastInsertRowid,
-      author: handle,
-      content
-    })
-  } catch (err) {
-    res.status(500).json({ error: String(err) })
-  }
-})
-
-// Get recent messages
-app.get('/api/messages', (req, res) => {
-  const messages = db.prepare('SELECT * FROM messages ORDER BY created_at DESC LIMIT 50').all()
-  res.json(messages)
-})
-
-// 4. THE MAIN PAGE
-app.get('/', (req, res) => {
   res.send(`
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Identity-Verified Storage</title>
+  <title>ATProto Multi-Server Chat</title>
   <style>
-    body { font-family: system-ui; max-width: 800px; margin: 2rem auto; line-height: 1.5; padding: 0 1rem; }
-    .panel { border: 1px solid #ccc; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; background: #fdfdfd; }
-    button { padding: 0.6rem 1.2rem; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; font-weight: bold; }
-    button:disabled { background: #ccc; cursor: not-allowed; }
-    pre { background: #111; color: #0f0; padding: 1rem; border-radius: 6px; overflow: auto; max-height: 200px; font-size: 0.85rem; }
-    input { padding: 0.6rem; width: 100%; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1rem; }
-    .msg-item { border-bottom: 1px solid #eee; padding: 0.5rem 0; }
-    .msg-author { font-weight: bold; color: #007bff; }
-    .msg-date { color: #666; font-size: 0.8rem; }
+    body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; background: #313338; color: #dbdee1; height: 100vh; overflow: hidden; }
+    #app-container { display: none; height: 100vh; width: 100vw; }
+    #server-sidebar { width: 72px; background: #1e1f22; display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; flex-shrink: 0; }
+    .server-icon { width: 48px; height: 48px; border-radius: 50%; background: #313338; color: #dbdee1; display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; transition: all 0.2s; position: relative; }
+    .server-icon:hover { border-radius: 16px; background: #5865f2; color: white; }
+    .server-icon.active { border-radius: 16px; background: #5865f2; color: white; }
+    .server-icon.active::before { content: ""; position: absolute; left: -12px; height: 40px; width: 4px; background: white; border-radius: 0 4px 4px 0; }
+    #chat-area { flex-grow: 1; display: flex; flex-direction: column; background: #313338; }
+    #chat-header { height: 48px; padding: 0 16px; display: flex; align-items: center; border-bottom: 1px solid #262729; font-weight: bold; }
+    #message-list { flex-grow: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column-reverse; gap: 16px; }
+    #input-area { padding: 0 16px 24px 16px; }
+    #message-input { width: 100%; padding: 11px; background: #383a40; border: none; border-radius: 8px; color: #dbdee1; font-size: 1rem; box-sizing: border-box; }
+    .msg-item { display: flex; flex-direction: column; gap: 4px; }
+    .msg-header { display: flex; align-items: baseline; gap: 8px; }
+    .msg-author { color: #f2f3f5; font-weight: 600; font-size: 1rem; }
+    .msg-date { color: #949ba4; font-size: 0.75rem; }
+    .msg-content { color: #dbdee1; line-height: 1.375; }
+    #login-panel { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #313338; z-index: 100; }
+    .login-card { background: #313338; padding: 32px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); width: 100%; max-width: 400px; text-align: center; }
+    .login-input { width: 100%; padding: 10px; margin: 20px 0; background: #1e1f22; border: 1px solid #1e1f22; border-radius: 3px; color: white; box-sizing: border-box; }
+    .login-btn { width: 100%; padding: 10px; background: #5865f2; color: white; border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }
+    #console-toggle { position: absolute; bottom: 80px; right: 20px; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    #console { position: absolute; bottom: 100px; right: 20px; width: 300px; max-height: 400px; background: #1e1f22; color: #23a559; padding: 10px; font-family: monospace; font-size: 11px; overflow: auto; border-radius: 8px; display: none; pointer-events: none; }
+    #user-info { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    #user-handle { font-size: 0.85rem; color: #b5bac1; }
+    #logout-btn { background: none; border: none; color: #dbdee1; cursor: pointer; padding: 4px 8px; font-size: 0.85rem; }
+    #loading-panel { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #313338; z-index: 200; }
+    .spinner { border: 4px solid #4e5058; border-top: 4px solid #5865f2; border-radius: 50%; width: 32px; height: 32px; animation: spin 1s linear infinite; margin-bottom: 12px; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-  <h1>ATProto Verified Storage</h1>
-  <p>Messages are stored in a local SQLite database ONLY after your identity is verified via DPoP.</p>
-
-  <div id="loading-panel" class="panel" style="text-align: center; padding: 2rem;">
+  <div id="loading-panel">
     <div class="spinner"></div>
-    <p>Checking session...</p>
+    <div>Syncing with ATProto...</div>
   </div>
-
-  <div id="login-panel" class="panel" style="display:none">
-    <label style="display:block; font-weight:bold; margin-bottom:0.5rem;">Handle</label>
-    <div style="display:flex; gap:0.5rem;">
-      <input id="handle" value="nandi.latha.org" placeholder="handle.bsky.social">
-      <button onclick="startLogin()" style="white-space:nowrap;">Login via PDS</button>
+  <div id="login-panel" style="display:none">
+    <div class="login-card">
+      <h2>Welcome back!</h2>
+      <p style="color: #b5bac1;">Log in with your ATProto handle to join the chat.</p>
+      <input id="handle" class="login-input" value="nandi.latha.org" placeholder="your-handle.bsky.social">
+      <button onclick="startLogin()" class="login-btn">Log In</button>
     </div>
   </div>
-
-  <div id="app-panel" class="panel" style="display:none">
-    <h3>Hello, <span id="user-handle" style="color:#007bff"></span></h3>
-    <div style="margin-top: 1rem; display:flex; flex-direction:column; gap:0.5rem;">
-      <label style="font-weight:bold;">New Message</label>
-      <input id="message-input" placeholder="Type something to store on the server...">
-      <button id="submit-btn" style="background: #28a745; width:fit-content;">Submit Message</button>
+  <div id="app-container">
+    <div id="server-sidebar"></div>
+    <div id="chat-area">
+      <div id="chat-header">
+        <span style="color:#80848e; margin-right: 8px;">#</span>
+        <span id="current-server-name">General</span>
+        <div id="user-info">
+          <span id="user-handle">...</span>
+          <button id="logout-btn" onclick="logout()">Logout</button>
+        </div>
+      </div>
+      <div id="message-list"></div>
+      <div id="input-area">
+        <input id="message-input" placeholder="Message #General">
+      </div>
     </div>
-    <br>
-    <button onclick="localStorage.clear();location.href='/'" style="background:#666; font-size:0.8rem; padding:0.4rem 0.8rem;">Logout</button>
   </div>
-
-  <div class="panel">
-    <h3>Global Message Board</h3>
-    <div id="message-list">Loading messages...</div>
-  </div>
-
-  <h3>System Log</h3>
-  <pre id="console">Loading bundle...</pre>
-
-  <style>
-    .spinner {
-      border: 4px solid #f3f3f3;
-      border-top: 4px solid #007bff;
-      border-radius: 50%;
-      width: 30px;
-      height: 30px;
-      animation: spin 1s linear infinite;
-      display: inline-block;
-      vertical-align: middle;
-      margin-right: 10px;
-    }
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-  </style>
-  <script src="/public/bundle.js"></script>
+  <div id="console-toggle" onclick="const c=document.getElementById('console'); c.style.display=c.style.display==='none'?'block':'none'">Toggle System Log</div>
+  <pre id="console">Initializing system...</pre>
+  <script src="/public/bundle.js?v=${Date.now()}"></script>
 </body>
 </html>
   `)
 })
 
-app.listen(PORT, '127.0.0.1', () => console.log(`Server listening on ${APP_ORIGIN}`))
+app.listen(PORT, '127.0.0.1', () => console.log(`Local dev server running at http://127.0.0.1:${PORT}`))

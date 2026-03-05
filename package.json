@@ -7,8 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "bun build ./src/client.ts --outfile=packages/client/public/bundle.js --minify --target=browser",
     "dev:client": "npx wrangler pages dev packages/client/public --port 3010",
-    "dev:server": "cd packages/server && npx wrangler dev",
-    "dev:server-alt": "cd packages/server-alt && npx wrangler dev --port 8788",
+    "dev:server": "cd packages/server && npx wrangler dev --remote false",
+    "dev:server-alt": "cd packages/server-alt && npx wrangler dev --remote false --port 8788",
     "deploy:client": "npx wrangler pages deploy packages/client/public",
     "deploy:server": "cd packages/server && npx wrangler deploy",
     "deploy:server-alt": "cd packages/server-alt && npx wrangler deploy"
@@ -36,6 +36,8 @@
     "better-sqlite3": "^12.6.2",
     "express": "^5.2.1",
     "jose": "^6.1.3",
+    "smol-toml": "^1.6.0",
+    "ulid": "^3.0.2",
     "zod": "^4.3.6"
   }
 }
