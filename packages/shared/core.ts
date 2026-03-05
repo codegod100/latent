@@ -46,7 +46,7 @@ export async function handleRequest(
     const { serverId, serverName, adminHandle, inviteOnly } = cachedConfig!;
 
     // 1. HELPERS
-    const verifyIdentity = async (body: any) => {
+    const verifyIdentity = async (body: any, skipMemberCheck = false) => {
       let result: { did: string, handle: string } | null = null;
       const authHeader = request.headers.get('Authorization');
       if (authHeader?.startsWith('Bearer ')) {
@@ -73,7 +73,7 @@ export async function handleRequest(
       }
       if (result) {
         if (await storage.isBanned(result.did)) throw { status: 403, error: 'User is banned from this server' };
-        if (inviteOnly && result.handle !== adminHandle) {
+        if (!skipMemberCheck && inviteOnly && result.handle !== adminHandle) {
           if (!(await storage.isMember(result.did))) throw { status: 403, error: 'This server is invite-only', inviteOnly: true };
         }
         return result;
@@ -85,6 +85,13 @@ export async function handleRequest(
       const profile = await verifyIdentity(body);
       if (profile.handle !== adminHandle) throw { status: 403, error: 'Admin only' };
       return profile;
+    };
+
+    const createToken = async (did: string, handle: string) => {
+      const token = ulid();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      await storage.createSession(token, did, handle, expiresAt);
+      return { token, expiresAt };
     };
 
     // 2. ROUTING (READS)
@@ -154,25 +161,22 @@ export async function handleRequest(
     if (url.pathname === '/api/auth' && request.method === 'POST') {
       const body = await request.json() as any;
       const profile = await verifyIdentity(body);
-      const token = ulid();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      await storage.createSession(token, profile.did, profile.handle, expiresAt);
+      const { token, expiresAt } = await createToken(profile.did, profile.handle);
       return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
     // --- JOIN (INVITES) ---
     if (url.pathname === '/api/join' && request.method === 'POST') {
       const body = await request.json() as any;
-      const { accessToken, dpopProof, pdsUrl, did, code } = body;
-      
-      // Verification logic (manual to bypass isMember check in verifyIdentity)
-      const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-      const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
-      if (!pdsRes.ok) return new Response(JSON.stringify({ error: 'Identity verification failed' }), { status: 401, headers });
-      
-      const success = await storage.useInvite(code, did);
+      const { code } = body;
+      // verifyIdentity with bypass ensures we handle DPoP properly without being blocked by membership check
+      const profile = await verifyIdentity(body, true);
+      const success = await storage.useInvite(code, profile.did);
       if (!success) return new Response(JSON.stringify({ error: 'Invalid or already used invite code' }), { status: 403, headers });
-      return new Response(JSON.stringify({ ok: true }), { headers });
+      
+      // Auto-issue session token upon successful join
+      const { token, expiresAt } = await createToken(profile.did, profile.handle);
+      return new Response(JSON.stringify({ ok: true, token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
     // --- MODERATION (BANS/INVITES) ---

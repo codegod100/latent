@@ -126,10 +126,14 @@ async function authenticateWithServer(server: any) {
   const session = (window as any).atprotoSession; if (!session) return;
   const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`;
   const submit = async (nonce: string | null = null) => {
-    const dpop = await getDpopProof(session, 'GET', probeUrl, nonce);
-    const res = await fetch(`${server.url}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) });
-    const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce);
-    if (res.ok) { serverSessions.set(server.url, { token: data.token, expires: data.expiresAt }); log(`Authenticated with ${server.host}`) }
+    try {
+      const dpop = await getDpopProof(session, 'GET', probeUrl, nonce);
+      const res = await fetch(`${server.url}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) });
+      const data = await res.json();
+      if (data.isChallenge) return submit(data.dpopNonce);
+      if (res.ok) { serverSessions.set(server.url, { token: data.token, expires: data.expiresAt }); log(`Authenticated with ${server.host}`) }
+      else if (res.status === 403) log(`Initial auth skipped: member check failed for ${server.host}`);
+    } catch (e) { log(`Auth failed for ${server.host}`, e); }
   };
   await submit();
 }
@@ -194,7 +198,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; input.focus(); }
+  if (input) { input.value = ''; }
   const resultsEl = document.getElementById('search-results');
   const clearBtn = document.getElementById('clear-search');
   if (resultsEl) resultsEl.style.display = 'none';
@@ -238,7 +242,6 @@ function renderMessages(shouldScrollBottom = true) {
   const resultsEl = document.getElementById('search-results')!
   const clearBtn = document.getElementById('clear-search')!
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
-  
   resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
   resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
   
@@ -412,9 +415,11 @@ async function showApp(session: any) {
             const data = await res.json();
             if (data.isChallenge) return submitJoin(data.dpopNonce);
             if (res.ok) {
+              serverSessions.set(currentServer.url, { token: data.token, expires: data.expiresAt });
               alert(`Successfully joined ${currentServer.name}!`);
               const cleanUrl = new URL(window.location.href); cleanUrl.searchParams.delete('invite');
               window.history.replaceState({}, '', cleanUrl.toString());
+              refreshMessages();
             } else { alert(`Failed to join: ${data.error || 'Invalid code'}`); }
           };
           await submitJoin();
