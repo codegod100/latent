@@ -25,8 +25,8 @@ let hasMoreMessages = true
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
   clientMetadata: { 
-    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/')}&scope=atproto%20transition:generic` : `${window.location.origin}/client-metadata.json`,
-    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/'],
+    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
+    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/'],
     scope: 'atproto transition:generic',
     token_endpoint_auth_method: 'none'
   }
