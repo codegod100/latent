@@ -1,11 +1,11 @@
 {
-  "client_id": "https://latent-e17.pages.dev/client-metadata.json",
-  "client_name": "Isolated ATProto Client",
+  "client_id": "https://latent.latha.org/client-metadata.json",
+  "client_name": "Latent",
   "application_type": "web",
   "token_endpoint_auth_method": "none",
   "dpop_bound_access_tokens": true,
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
-  "redirect_uris": ["https://latent-e17.pages.dev/"],
+  "redirect_uris": ["https://latent.latha.org/"],
   "scope": "atproto transition:generic"
 }
