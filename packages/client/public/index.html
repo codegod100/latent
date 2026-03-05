@@ -94,8 +94,11 @@
     .edit-save { color: var(--green); background: none; border: none; cursor: pointer; font-weight: bold; }
     .edit-cancel { color: var(--red); background: none; border: none; cursor: pointer; }
 
-    .flash-highlight { animation: flash 2s ease-out; }
-    @keyframes flash { 0% { background: rgba(137, 180, 250, 0.3); } 100% { background: transparent; } }
+    .flash-highlight { animation: flash 3s ease-out; }
+    @keyframes flash { 
+      0% { background: rgba(137, 180, 250, 0.5); outline: 2px solid var(--blue); } 
+      100% { background: transparent; outline: 2px solid transparent; } 
+    }
 
     /* Search UI */
     #search-container { position: relative; margin-left: auto; display: flex; align-items: center; }

@@ -207,7 +207,7 @@ function renderMessages(shouldScrollBottom = true) {
   if (existingEl) {
     existingEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
     existingEl.classList.add('flash-highlight')
-    setTimeout(() => existingEl.classList.remove('flash-highlight'), 2000)
+    setTimeout(() => existingEl.classList.remove('flash-highlight'), 3000)
     return
   }
 
@@ -222,7 +222,7 @@ function renderMessages(shouldScrollBottom = true) {
     if (targetEl) {
       targetEl.scrollIntoView({ block: 'center' })
       targetEl.classList.add('flash-highlight')
-      setTimeout(() => targetEl.classList.remove('flash-highlight'), 2000)
+      setTimeout(() => targetEl.classList.remove('flash-highlight'), 3000)
     }
   } catch (e) { log('Jump failed', e) }
 };
