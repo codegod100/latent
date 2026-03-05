@@ -21,6 +21,7 @@ let ws: WebSocket | null = null
 let currentWsUrl: string | null = null
 let isLoadingOlder = false
 let hasMoreMessages = true
+let searchTimeout: any = null
 
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
@@ -171,27 +172,14 @@ function renderMessages(shouldScrollBottom = true) {
   
   container.innerHTML = (hasMoreMessages ? '<div id="load-more-indicator" style="text-align:center; padding:10px; color:var(--subtext0); font-size:12px;">Scroll up to load more</div>' : '') + 
     currentMessages.slice().reverse().map((m: any) => {
-    // Group reactions by emoji and collect handles
-    const reactionsByEmoji = (m.reactions || []).reduce((acc: any, r: any) => {
-      if (!acc[r.emoji]) acc[r.emoji] = [];
-      acc[r.emoji].push(r.handle);
-      return acc;
-    }, {});
-
+    const reactionsByEmoji = (m.reactions || []).reduce((acc: any, r: any) => { if (!acc[r.emoji]) acc[r.emoji] = []; acc[r.emoji].push(r.handle); return acc; }, {});
     const myReactions = (m.reactions || []).filter((r: any) => r.did === currentUserDid).map((r: any) => r.emoji);
-    const reactionHtml = Object.entries(reactionsByEmoji).map(([emoji, handles]: [string, any]) => `
-      <div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" 
-           onclick="window.toggleReaction('${m.id}', '${emoji}')"
-           title="${handles.join(', ')}">
-        <span>${emoji}</span><span class="reaction-count">${handles.length}</span>
-      </div>
-    `).join('');
-
+    const reactionHtml = Object.entries(reactionsByEmoji).map(([emoji, handles]: [string, any]) => `<div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" onclick="window.toggleReaction('${m.id}', '${emoji}')" title="${handles.join(', ')}"><span>${emoji}</span><span class="reaction-count">${handles.length}</span></div>`).join('');
     const parentMsg = m.parent; 
 
     return `
       <div class="msg-item" id="msg-${m.id}">
-        ${parentMsg ? `<div class="msg-reply-to" onclick="document.getElementById('msg-${parentMsg.id}')?.scrollIntoView({behavior:'smooth'})">
+        ${parentMsg ? `<div class="msg-reply-to" onclick="window.jumpToMessage('${parentMsg.id}')">
           <span style="opacity:0.6">@${parentMsg.handle}:</span> ${parentMsg.content.substring(0, 60)}${parentMsg.content.length > 60 ? '...' : ''}
         </div>` : ''}
         <div class="msg-actions">
@@ -212,6 +200,50 @@ function renderMessages(shouldScrollBottom = true) {
   
   if (shouldScrollBottom) container.scrollTop = container.scrollHeight
 }
+
+// --- SEARCH & NAVIGATION ---
+(window as any).jumpToMessage = async (id: string) => {
+  const existingEl = document.getElementById(`msg-${id}`)
+  if (existingEl) {
+    existingEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    existingEl.classList.add('flash-highlight')
+    setTimeout(() => existingEl.classList.remove('flash-highlight'), 2000)
+    return
+  }
+
+  const container = document.getElementById('message-list')!
+  container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Jumping to message...</div></div>`
+  try {
+    const res = await fetch(`${currentServer.url}/api/message-context?channelId=${currentChannel.id}&id=${id}`)
+    currentMessages = await res.json()
+    hasMoreMessages = true
+    renderMessages(false)
+    const targetEl = document.getElementById(`msg-${id}`)
+    if (targetEl) {
+      targetEl.scrollIntoView({ block: 'center' })
+      targetEl.classList.add('flash-highlight')
+      setTimeout(() => targetEl.classList.remove('flash-highlight'), 2000)
+    }
+  } catch (e) { log('Jump failed', e) }
+};
+
+(window as any).performSearch = async (query: string) => {
+  const resultsEl = document.getElementById('search-results')!
+  if (!query || query.length < 2) { resultsEl.style.display = 'none'; return }
+  resultsEl.style.display = 'block'
+  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching...</div>'
+  try {
+    const res = await fetch(`${currentServer.url}/api/search?channelId=${currentChannel.id}&q=${encodeURIComponent(query)}`)
+    const results = await res.json()
+    if (results.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results</div>'; return }
+    resultsEl.innerHTML = results.map((m: any) => `
+      <div class="search-result-item" onclick="window.jumpToMessage('${m.id}'); document.getElementById('search-results').style.display='none'">
+        <div class="search-result-header"><span>@${m.handle}</span><span>${new Date(m.created_at).toLocaleDateString()}</span></div>
+        <div class="search-result-content">${m.content.substring(0, 80)}${m.content.length > 80 ? '...' : ''}</div>
+      </div>
+    `).join('')
+  } catch (e) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--red); font-size:12px;">Search failed</div>' }
+};
 
 // --- ACTIONS ---
 async function serverMutation(server: any, endpoint: string, body: any) {
@@ -277,15 +309,9 @@ async function hydrateServers() {
     try { 
       const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 10000 }); 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const meta = await res.json(); 
-      const host = new URL(url).host; 
-      return { ...meta, url, host, id: meta.id || host } 
+      const meta = await res.json(); const host = new URL(url).host; return { ...meta, url, host, id: meta.id || host } 
     }
-    catch (e) { 
-      const host = new URL(url).host; 
-      log(`Server ${host} is offline`, e);
-      return { id: host, name: 'Offline Server', url, host, error: true, categories: [], channels: [] } 
-    }
+    catch (e) { const host = new URL(url).host; log(`Server ${host} is offline`, e); return { id: host, name: 'Offline Server', url, host, error: true, categories: [], channels: [] } }
   }))
   if (targetHost) currentServer = SERVERS.find(s => s.host === targetHost)
   if (!currentServer) currentServer = SERVERS[0]
@@ -375,5 +401,13 @@ if (msgList) {
 
 const inputEl = document.getElementById('message-input');
 if (inputEl) { inputEl.onkeydown = (e) => { if (e.key === 'Enter') (window as any).submitMessage() }; }
+
+const sInput = document.getElementById('search-input');
+if (sInput) {
+  sInput.oninput = (e: any) => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => (window as any).performSearch(e.target.value), 300);
+  };
+}
 
 init()

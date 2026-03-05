@@ -75,8 +75,8 @@
     .msg-date { color: var(--subtext0); font-size: 0.7rem; }
     .msg-content { color: var(--text); line-height: 1.375; word-break: break-word; }
     
-    .msg-reply-to { font-size: 12px; color: var(--blue); margin-bottom: -2px; display: flex; align-items: center; gap: 4px; opacity: 0.8; }
-    .msg-reply-to::before { content: "┌"; margin-top: 4px; }
+    .msg-reply-to { font-size: 12px; color: var(--blue); margin-bottom: -2px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .msg-reply-to:hover { text-decoration: underline; }
 
     .msg-actions { position: absolute; right: 8px; top: -12px; background: var(--surface0); border: 1px solid var(--surface1); border-radius: 4px; display: none; gap: 4px; padding: 2px 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 10; }
     .msg-item:hover .msg-actions { display: flex; }
@@ -88,18 +88,25 @@
     .reaction-chip:hover { border-color: var(--surface2); }
     .reaction-chip.active { background: rgba(137, 180, 250, 0.1); border-color: var(--blue); }
     .reaction-count { color: var(--subtext0); font-size: 11px; }
-    .reaction-chip.active .reaction-count { color: var(--blue); }
 
-    .edit-link { color: var(--blue); font-size: 10px; cursor: pointer; margin-left: 8px; opacity: 0.6; }
     .edit-input { width: 100%; padding: 8px; background: var(--surface0); border: 1px solid var(--blue); border-radius: 4px; color: var(--text); margin-top: 4px; box-sizing: border-box; }
     .edit-actions { display: flex; gap: 8px; margin-top: 4px; font-size: 12px; }
     .edit-save { color: var(--green); background: none; border: none; cursor: pointer; font-weight: bold; }
     .edit-cancel { color: var(--red); background: none; border: none; cursor: pointer; }
 
-    .loading-overlay { opacity: 0.5; pointer-events: none; }
-    .big-spinner { border: 4px solid var(--surface0); border-top: 4px solid var(--blue); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--subtext0); }
+    .flash-highlight { animation: flash 2s ease-out; }
+    @keyframes flash { 0% { background: rgba(137, 180, 250, 0.3); } 100% { background: transparent; } }
+
+    /* Search UI */
+    #search-container { position: relative; margin-left: auto; display: flex; align-items: center; }
+    #search-input { background: var(--crust); border: 1px solid var(--surface0); border-radius: 4px; padding: 4px 8px; color: var(--text); font-size: 13px; width: 140px; transition: width 0.2s; }
+    #search-input:focus { width: 220px; outline: none; border-color: var(--surface2); }
+    #search-results { display: none; position: absolute; top: 40px; right: 0; width: 300px; max-height: 400px; background: var(--mantle); border: 1px solid var(--surface1); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 200; overflow-y: auto; }
+    .search-result-item { padding: 10px; border-bottom: 1px solid var(--surface0); cursor: pointer; }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--surface0); }
+    .search-result-header { font-size: 11px; color: var(--subtext0); margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .search-result-content { font-size: 13px; color: var(--text); word-break: break-word; }
 
     #mobile-menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; }
     #mobile-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5); z-index: 90; }
@@ -115,6 +122,10 @@
     #user-info { margin-top: auto; padding: 12px; background: var(--crust); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
     #user-handle { font-size: 0.8rem; font-weight: bold; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+    .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--subtext0); }
+    .big-spinner { border: 4px solid var(--surface0); border-top: 4px solid var(--blue); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
     @media (max-width: 768px) {
       #mobile-menu-btn { display: block; }
       #server-sidebar { position: absolute; left: 0; top: 0; bottom: 0; transform: translateX(-100%); z-index: 110; }
@@ -122,6 +133,8 @@
       #app-container.menu-open #server-sidebar, #app-container.menu-open #channel-sidebar { transform: translateX(0); }
       #app-container.menu-open #mobile-overlay { display: block; }
       #input-area { padding: 0 8px 12px 8px; }
+      #search-input { width: 80px; }
+      #search-input:focus { width: 140px; }
     }
   </style>
 </head>
@@ -163,6 +176,11 @@
         <button id="mobile-menu-btn" onclick="toggleMenu(true)">☰</button>
         <span class="channel-hash">#</span>
         <span id="current-channel-name" style="color: var(--text); flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">...</span>
+        
+        <div id="search-container">
+          <input id="search-input" placeholder="Search..." autocomplete="off">
+          <div id="search-results"></div>
+        </div>
       </div>
 
       <div id="message-list"></div>

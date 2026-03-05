@@ -31,30 +31,19 @@ export async function handleRequest(
     // 0. OPTIMIZED BOOTSTRAP (Once per isolate lifecycle)
     if (!isBootstrapped) {
       await storage.ensureTables();
-      
       let serverId = await storage.getConfig('server_id');
       if (!serverId) { serverId = ulid(); await storage.setConfig('server_id', serverId); }
-      
-      // Use DB value if present, otherwise seed from config
       let serverName = await storage.getConfig('server_name');
       if (!serverName) { serverName = configSeed.defaultName; await storage.setConfig('server_name', serverName); }
-      
       let adminHandle = await storage.getConfig('admin_handle');
       if (!adminHandle) { adminHandle = configSeed.adminHandle; await storage.setConfig('admin_handle', adminHandle); }
-
-      // Ensure default channel
       const channels = await storage.listChannels();
-      if (channels.length === 0) {
-        await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
-      }
-
+      if (channels.length === 0) await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
       cachedConfig = { serverId, serverName, adminHandle };
       isBootstrapped = true;
     }
 
-    const { serverId } = cachedConfig!;
-    const serverName = cachedConfig!.serverName;
-    const adminHandle = cachedConfig!.adminHandle;
+    const { serverId, serverName, adminHandle } = cachedConfig!;
 
     // 1. HELPERS
     const verifyIdentity = async (body: any) => {
@@ -64,12 +53,10 @@ export async function handleRequest(
         const session = await storage.getSession(token);
         if (session) return { did: session.did, handle: session.handle };
       }
-
       const { accessToken, dpopProof, pdsUrl, did } = body;
       const cacheKey = `${did}:${accessToken}`;
       const cached = identityCache.get(cacheKey);
       if (cached && cached.expires > Date.now()) return cached.profile;
-
       const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
       const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
       const dpopNonce = pdsRes.headers.get('dpop-nonce');
@@ -88,30 +75,7 @@ export async function handleRequest(
 
     // 2. ROUTING
     if (url.pathname === '/') {
-      return new Response(`
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>ATProto Backend</title>
-          <style>
-            body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
-            h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
-            strong { color: #f5e0dc; }
-            .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
-            code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
-          </style>
-        </head>
-        <body>
-          <h1>ATProto Verified Backend: ${serverName}</h1>
-          <div class="info-box">
-            <strong>Server ID:</strong> <code>${serverId}</code><br>
-            <strong>Admin:</strong> <code>@${adminHandle}</code>
-          </div>
-          <p>Status: <strong>Active (Performance Optimized)</strong></p>
-        </body>
-        </html>
-      `, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
+      return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Latent Backend</title></head><body><h1>${serverName}</h1><p>Status: Active</p></body></html>`, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
     }
 
     if (url.pathname === '/api/ws') {
@@ -131,34 +95,56 @@ export async function handleRequest(
 
     if (url.pathname === '/api/meta' && request.method === 'GET') {
       const [categories, chanList] = await Promise.all([storage.listCategories(), storage.listChannels()]);
-      return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList, features: { ws: !!notifier } }), 
-        { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+      return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList, features: { ws: !!notifier } }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
+    // --- MESSAGES & SEARCH ---
     if (url.pathname === '/api/messages' && request.method === 'GET') {
       const channelId = url.searchParams.get('channelId');
       const beforeId = url.searchParams.get('before');
       const limit = parseInt(url.searchParams.get('limit') || '50');
-      
       const messages = await storage.listMessages(channelId, beforeId, limit);
       if (messages.length === 0) return new Response(JSON.stringify([]), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
-
       const messageIds = messages.map(m => m.id);
       const allReactions = await storage.listReactions(messageIds);
-      
       const parentIds = Array.from(new Set(messages.filter(m => m.parent_id).map(m => m.parent_id)));
       const parents = await Promise.all(parentIds.map(id => storage.getMessage(id!)));
-      
       const messagesDetailed = messages.map(m => ({
         ...m,
         reactions: allReactions.filter(r => r.message_id === m.id),
         parent: m.parent_id ? parents.find(p => p?.id === m.parent_id) : null
       }));
-      
       return new Response(JSON.stringify(messagesDetailed), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
-    // --- WRITE OPERATIONS (Identity required) ---
+    if (url.pathname === '/api/search' && request.method === 'GET') {
+      const channelId = url.searchParams.get('channelId');
+      const query = url.searchParams.get('q');
+      if (!query) return new Response(JSON.stringify([]), { headers });
+      const results = await storage.searchMessages(channelId, query, 20);
+      return new Response(JSON.stringify(results), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+    }
+
+    if (url.pathname === '/api/message-context' && request.method === 'GET') {
+      const channelId = url.searchParams.get('channelId');
+      const targetId = url.searchParams.get('id');
+      if (!targetId) return new Response(JSON.stringify([]), { headers });
+      // Fetch 50 messages starting from the target message (inclusive) downwards
+      // Since our listMessages is "beforeId", we fetch with id <= targetId
+      const messages = await storage.listMessages(channelId, targetId + 'z', 50); 
+      const messageIds = messages.map(m => m.id);
+      const allReactions = await storage.listReactions(messageIds);
+      const parentIds = Array.from(new Set(messages.filter(m => m.parent_id).map(m => m.parent_id)));
+      const parents = await Promise.all(parentIds.map(id => storage.getMessage(id!)));
+      const detailed = messages.map(m => ({
+        ...m,
+        reactions: allReactions.filter(r => r.message_id === m.id),
+        parent: m.parent_id ? parents.find(p => p?.id === m.parent_id) : null
+      }));
+      return new Response(JSON.stringify(detailed), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+    }
+
+    // --- WRITE OPERATIONS ---
     if (request.method === 'POST' || request.method === 'DELETE') {
       const body = await (async () => { try { return await request.json() } catch(e) { return {} } })();
       
@@ -208,11 +194,9 @@ export async function handleRequest(
         return new Response(JSON.stringify({ ok: true }), { headers });
       }
 
-      // ADMIN PROTECTED
       if (url.pathname === '/api/meta') {
-        await verifyAdmin(body); 
-        await storage.setConfig('server_name', body.name);
-        if (cachedConfig) cachedConfig.serverName = body.name; // Invalidate cache
+        await verifyAdmin(body); await storage.setConfig('server_name', body.name);
+        if (cachedConfig) cachedConfig.serverName = body.name;
         return new Response(JSON.stringify({ ok: true }), { headers });
       }
       if (url.pathname === '/api/categories') {

@@ -15,6 +15,7 @@ export interface Storage {
   addReaction(messageId: string, did: string, handle: string, emoji: string): Promise<void>;
   removeReaction(messageId: string, did: string, emoji: string): Promise<void>;
   listReactions(messageIds: string[]): Promise<any[]>;
+  searchMessages(channelId: string | null, query: string, limit?: number): Promise<any[]>;
   
   // Session Management
   createSession(token: string, did: string, handle: string, expiresAt: string): Promise<void>;
@@ -60,20 +61,19 @@ export class D1Storage implements Storage {
   async listMessages(channelId: string | null, beforeId: string | null = null, limit: number = 50) {
     let query = 'SELECT * FROM messages WHERE (channel_id = ? OR (channel_id IS NULL AND ? IS NULL))';
     const params: any[] = [channelId, channelId];
-    
-    if (beforeId) {
-      query += ' AND id < ?';
-      params.push(beforeId);
-    }
-    
+    if (beforeId) { query += ' AND id < ?'; params.push(beforeId); }
     query += ' ORDER BY id DESC LIMIT ?';
     params.push(limit);
-    
     return (await this.db.prepare(query).bind(...params).all()).results;
   }
 
+  async searchMessages(channelId: string | null, query: string, limit: number = 20) {
+    let sql = 'SELECT * FROM messages WHERE (channel_id = ? OR (channel_id IS NULL AND ? IS NULL)) AND content LIKE ? ORDER BY id DESC LIMIT ?';
+    return (await this.db.prepare(sql).bind(channelId, channelId, `%${query}%`, limit).all()).results;
+  }
+
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId: string | null = null) {
-    await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, did, handle, content, channelId, parentId).run();
+    await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, did, handle, content, channel_id, parent_id).run();
   }
   async getMessage(id: string) { return await this.db.prepare('SELECT * FROM messages WHERE id = ?').bind(id).first(); }
   async updateMessage(id: string, did: string, content: string) {
@@ -125,27 +125,24 @@ export class SQLiteStorage implements Storage {
   async listMessages(channelId: string | null, beforeId: string | null = null, limit: number = 50) {
     let query = 'SELECT * FROM messages WHERE ';
     const params: any[] = [];
-    
-    if (channelId) {
-      query += 'channel_id = ?';
-      params.push(channelId);
-    } else {
-      query += 'channel_id IS NULL';
-    }
-    
-    if (beforeId) {
-      query += ' AND id < ?';
-      params.push(beforeId);
-    }
-    
+    if (channelId) { query += 'channel_id = ?'; params.push(channelId); } else { query += 'channel_id IS NULL'; }
+    if (beforeId) { query += ' AND id < ?'; params.push(beforeId); }
     query += ' ORDER BY id DESC LIMIT ?';
     params.push(limit);
-    
     return this.db.prepare(query).all(...params);
   }
 
-  async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId: string | null = null) {
-    this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channelId, parentId);
+  async searchMessages(channelId: string | null, query: string, limit: number = 20) {
+    let sql = 'SELECT * FROM messages WHERE ';
+    const params: any[] = [];
+    if (channelId) { sql += 'channel_id = ?'; params.push(channelId); } else { sql += 'channel_id IS NULL'; }
+    sql += ' AND content LIKE ? ORDER BY id DESC LIMIT ?';
+    params.push(`%${query}%`, limit);
+    return this.db.prepare(sql).all(...params);
+  }
+
+  async addMessage(id: string, did: string, handle: string, content: string, channel_id: string | null, parent_id: string | null = null) {
+    this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channel_id, parent_id);
   }
   async getMessage(id: string) { return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id); }
   async updateMessage(id: string, did: string, content: string) {
