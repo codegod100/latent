@@ -11,59 +11,48 @@ export async function handleRequest(request: Request, storage: Storage, configSe
 
   if (request.method === 'OPTIONS') return new Response(null, { headers });
 
-  // 1. SYNC CONFIG
-  const serverId = (await storage.getConfig('server_id')) || (await (async () => {
-    const id = ulid();
-    await storage.setConfig('server_id', id);
-    return id;
-  })());
-  const serverName = (await storage.getConfig('server_name')) || (await (async () => {
-    await storage.setConfig('server_name', configSeed.defaultName);
-    return configSeed.defaultName;
-  })());
-  const adminHandle = (await storage.getConfig('admin_handle')) || (await (async () => {
-    await storage.setConfig('admin_handle', configSeed.adminHandle);
-    return configSeed.adminHandle;
-  })());
-
-  // 2. ENSURE DEFAULT CHANNEL
-  const channels = await storage.listChannels();
-  if (channels.length === 0) {
-    await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
-  }
-
-  // 3. IDENTITY NOTARY (Verifies DID + Handle via PDS)
-  const verifyIdentity = async (body: any) => {
-    const { accessToken, dpopProof, pdsUrl, did } = body;
-    const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-    
-    const pdsRes = await fetch(probeUrl, { 
-      headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } 
-    });
-    const dpopNonce = pdsRes.headers.get('dpop-nonce');
-    
-    if (!pdsRes.ok) {
-      throw { 
-        status: pdsRes.status, 
-        isChallenge: pdsRes.status === 401 && !!dpopNonce,
-        dpopNonce, 
-        error: 'Identity verification failed' 
-      };
-    }
-    
-    return await pdsRes.json() as any;
-  };
-
-  const verifyAdmin = async (body: any) => {
-    const profile = await verifyIdentity(body);
-    if (profile.handle !== adminHandle) {
-      throw { status: 403, error: 'Admin only' };
-    }
-    return profile;
-  };
-
-  // 4. ROUTING
   try {
+    // 0. BOOTSTRAP (Create tables if missing)
+    await storage.ensureTables();
+
+    // 1. SYNC CONFIG (Now inside try block)
+    const serverId = (await storage.getConfig('server_id')) || (await (async () => {
+      const id = ulid();
+      await storage.setConfig('server_id', id);
+      return id;
+    })());
+    const serverName = (await storage.getConfig('server_name')) || (await (async () => {
+      await storage.setConfig('server_name', configSeed.defaultName);
+      return configSeed.defaultName;
+    })());
+    const adminHandle = (await storage.getConfig('admin_handle')) || (await (async () => {
+      await storage.setConfig('admin_handle', configSeed.adminHandle);
+      return configSeed.adminHandle;
+    })());
+
+    // 2. ENSURE DEFAULT CHANNEL
+    const channels = await storage.listChannels();
+    if (channels.length === 0) {
+      await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
+    }
+
+    // 3. HELPERS
+    const verifyIdentity = async (body: any) => {
+      const { accessToken, dpopProof, pdsUrl, did } = body;
+      const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
+      const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
+      const dpopNonce = pdsRes.headers.get('dpop-nonce');
+      if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: 'Identity verification failed' };
+      return await pdsRes.json() as any;
+    };
+
+    const verifyAdmin = async (body: any) => {
+      const profile = await verifyIdentity(body);
+      if (profile.handle !== adminHandle) throw { status: 403, error: 'Admin only' };
+      return profile;
+    };
+
+    // 4. ROUTING
     // --- LANDING PAGE ---
     if (url.pathname === '/') {
       return new Response(`
@@ -78,7 +67,6 @@ export async function handleRequest(request: Request, storage: Storage, configSe
             strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
-            a { color: #89b4fa; text-decoration: none; }
           </style>
         </head>
         <body>
@@ -161,18 +149,19 @@ export async function handleRequest(request: Request, storage: Storage, configSe
       const body = await request.json() as any;
       const profile = await verifyIdentity(body);
       const { id, content, did } = body;
-      
-      // Authorization check happens in updateMessage (WHERE did = ?)
       const success = await storage.updateMessage(id, did, content);
       if (!success) throw { status: 403, error: 'Unauthorized or message not found' };
-      
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
+    return new Response('Not Found', { status: 404, headers });
+
   } catch (err: any) {
     const status = err.status === 401 ? 200 : (err.status || 500);
-    return new Response(JSON.stringify(err), { status, headers });
+    const errorBody = err instanceof Error ? { error: err.message, stack: err.stack } : err;
+    return new Response(JSON.stringify(errorBody), { 
+      status, 
+      headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } 
+    });
   }
-
-  return new Response('Not Found', { status: 404, headers });
 }

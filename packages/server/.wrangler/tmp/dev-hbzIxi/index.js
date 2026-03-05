@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// .wrangler/tmp/bundle-ZfSTSl/checked-fetch.js
+// .wrangler/tmp/bundle-sK727w/checked-fetch.js
 var urls = /* @__PURE__ */ new Set();
 function checkURL(request, init) {
   const url = request instanceof URL ? request : new URL(
@@ -736,12 +736,25 @@ function parse(toml, { maxDepth = 1e3, integersAsBigInt } = {}) {
 __name(parse, "parse");
 
 // ../shared/storage.ts
+var SCHEMA = `
+  CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+`;
 var D1Storage = class {
   constructor(db) {
     this.db = db;
   }
   static {
     __name(this, "D1Storage");
+  }
+  async ensureTables() {
+    await this.db.exec(SCHEMA);
+    try {
+      await this.db.prepare("ALTER TABLE messages ADD COLUMN channel_id TEXT").run();
+    } catch (e) {
+    }
   }
   async getConfig(key) {
     return (await this.db.prepare("SELECT value FROM config WHERE key = ?").bind(key).first())?.value || null;
@@ -894,48 +907,38 @@ async function handleRequest(request, storage, configSeed2) {
     "Access-Control-Allow-Headers": "Content-Type, Authorization, DPoP"
   });
   if (request.method === "OPTIONS") return new Response(null, { headers });
-  const serverId = await storage.getConfig("server_id") || await (async () => {
-    const id = ulid();
-    await storage.setConfig("server_id", id);
-    return id;
-  })();
-  const serverName = await storage.getConfig("server_name") || await (async () => {
-    await storage.setConfig("server_name", configSeed2.defaultName);
-    return configSeed2.defaultName;
-  })();
-  const adminHandle = await storage.getConfig("admin_handle") || await (async () => {
-    await storage.setConfig("admin_handle", configSeed2.adminHandle);
-    return configSeed2.adminHandle;
-  })();
-  const channels = await storage.listChannels();
-  if (channels.length === 0) {
-    await storage.addChannel(ulid(), null, "general", "General discussion", 0);
-  }
-  const verifyIdentity = /* @__PURE__ */ __name(async (body) => {
-    const { accessToken, dpopProof, pdsUrl, did } = body;
-    const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
-    const pdsRes = await fetch(probeUrl, {
-      headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof }
-    });
-    const dpopNonce = pdsRes.headers.get("dpop-nonce");
-    if (!pdsRes.ok) {
-      throw {
-        status: pdsRes.status,
-        isChallenge: pdsRes.status === 401 && !!dpopNonce,
-        dpopNonce,
-        error: "Identity verification failed"
-      };
-    }
-    return await pdsRes.json();
-  }, "verifyIdentity");
-  const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
-    const profile = await verifyIdentity(body);
-    if (profile.handle !== adminHandle) {
-      throw { status: 403, error: "Admin only" };
-    }
-    return profile;
-  }, "verifyAdmin");
   try {
+    await storage.ensureTables();
+    const serverId = await storage.getConfig("server_id") || await (async () => {
+      const id = ulid();
+      await storage.setConfig("server_id", id);
+      return id;
+    })();
+    const serverName = await storage.getConfig("server_name") || await (async () => {
+      await storage.setConfig("server_name", configSeed2.defaultName);
+      return configSeed2.defaultName;
+    })();
+    const adminHandle = await storage.getConfig("admin_handle") || await (async () => {
+      await storage.setConfig("admin_handle", configSeed2.adminHandle);
+      return configSeed2.adminHandle;
+    })();
+    const channels = await storage.listChannels();
+    if (channels.length === 0) {
+      await storage.addChannel(ulid(), null, "general", "General discussion", 0);
+    }
+    const verifyIdentity = /* @__PURE__ */ __name(async (body) => {
+      const { accessToken, dpopProof, pdsUrl, did } = body;
+      const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
+      const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
+      const dpopNonce = pdsRes.headers.get("dpop-nonce");
+      if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: "Identity verification failed" };
+      return await pdsRes.json();
+    }, "verifyIdentity");
+    const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
+      const profile = await verifyIdentity(body);
+      if (profile.handle !== adminHandle) throw { status: 403, error: "Admin only" };
+      return profile;
+    }, "verifyAdmin");
     if (url.pathname === "/") {
       return new Response(`
         <!doctype html>
@@ -949,7 +952,6 @@ async function handleRequest(request, storage, configSeed2) {
             strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
-            a { color: #89b4fa; text-decoration: none; }
           </style>
         </head>
         <body>
@@ -1028,11 +1030,15 @@ async function handleRequest(request, storage, configSeed2) {
       if (!success) throw { status: 403, error: "Unauthorized or message not found" };
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
+    return new Response("Not Found", { status: 404, headers });
   } catch (err) {
     const status = err.status === 401 ? 200 : err.status || 500;
-    return new Response(JSON.stringify(err), { status, headers });
+    const errorBody = err instanceof Error ? { error: err.message, stack: err.stack } : err;
+    return new Response(JSON.stringify(errorBody), {
+      status,
+      headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" }
+    });
   }
-  return new Response("Not Found", { status: 404, headers });
 }
 __name(handleRequest, "handleRequest");
 
@@ -1087,7 +1093,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-ZfSTSl/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-sK727w/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -1119,7 +1125,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-ZfSTSl/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-sK727w/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

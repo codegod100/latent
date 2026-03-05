@@ -1,4 +1,5 @@
 export interface Storage {
+  ensureTables(): Promise<void>;
   getConfig(key: string): Promise<string | null>;
   setConfig(key: string, value: string): Promise<void>;
   listCategories(): Promise<any[]>;
@@ -13,9 +14,25 @@ export interface Storage {
   getMessage(id: string): Promise<any | null>;
 }
 
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+`;
+
 // Implementation for Cloudflare D1
 export class D1Storage implements Storage {
   constructor(private db: D1Database) {}
+  
+  async ensureTables() {
+    await this.db.exec(SCHEMA);
+    // Migration: ensure channel_id exists (if tables were created in very first iteration without it)
+    try {
+      await this.db.prepare('ALTER TABLE messages ADD COLUMN channel_id TEXT').run();
+    } catch (e) {} 
+  }
+
   async getConfig(key: string) { return (await this.db.prepare('SELECT value FROM config WHERE key = ?').bind(key).first() as any)?.value || null; }
   async setConfig(key: string, value: string) { await this.db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)').bind(key, value).run(); }
   async listCategories() { return (await this.db.prepare('SELECT * FROM categories ORDER BY sort_order ASC').all()).results; }
@@ -46,16 +63,12 @@ export class D1Storage implements Storage {
 
 // Implementation for SQLite (Bun)
 export class SQLiteStorage implements Storage {
-  constructor(private db: any) {
-    this.init();
-  }
-  private init() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
-      CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-    `);
+  constructor(private db: any) {}
+  async ensureTables() {
+    this.db.exec(SCHEMA);
+    try {
+      this.db.prepare('ALTER TABLE messages ADD COLUMN channel_id TEXT').run();
+    } catch (e) {}
   }
   async getConfig(key: string) { return this.db.prepare('SELECT value FROM config WHERE key = ?').get(key)?.value || null; }
   async setConfig(key: string, value: string) { this.db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)').run(key, value); }
