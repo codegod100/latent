@@ -86,7 +86,7 @@ export async function handleRequest(
       return profile;
     };
 
-    // 2. ROUTING
+    // 2. ROUTING (READS)
     if (url.pathname === '/') {
       return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Latent Backend</title></head><body><h1>${serverName}</h1><p>Status: Active</p></body></html>`, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
     }
@@ -95,15 +95,6 @@ export async function handleRequest(
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket upgrade', { status: 400 });
       if (!notifier) return new Response('WebSockets not supported', { status: 501 });
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
-    }
-
-    if (url.pathname === '/api/auth' && request.method === 'POST') {
-      const body = await request.json() as any;
-      const profile = await verifyIdentity(body);
-      const token = ulid();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      await storage.createSession(token, profile.did, profile.handle, expiresAt);
-      return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
     if (url.pathname === '/api/meta' && request.method === 'GET') {
@@ -158,7 +149,39 @@ export async function handleRequest(
       return new Response(JSON.stringify(detailed), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
-    // --- WRITE OPERATIONS ---
+    // --- AUTH/SESSIONS ---
+    if (url.pathname === '/api/auth' && request.method === 'POST') {
+      const body = await request.json() as any;
+      const profile = await verifyIdentity(body);
+      const token = ulid();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      await storage.createSession(token, profile.did, profile.handle, expiresAt);
+      return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+    }
+
+    // --- MODERATION (BANS) ---
+    if (url.pathname === '/api/mod/bans') {
+      if (request.method === 'GET') {
+        const profile = await verifyIdentity({});
+        if (profile.handle !== adminHandle) throw { status: 403, error: 'Admin only' };
+        const bans = await storage.listBans();
+        return new Response(JSON.stringify(bans), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+      }
+      if (request.method === 'POST' || request.method === 'DELETE') {
+        const body = await (async () => { try { return await request.json() } catch(e) { return {} } })();
+        await verifyAdmin(body);
+        if (request.method === 'POST') {
+          await storage.addBan(body.did, body.handle, body.reason || '');
+          return new Response(JSON.stringify({ ok: true }), { headers });
+        }
+        if (request.method === 'DELETE') {
+          await storage.removeBan(body.did);
+          return new Response(JSON.stringify({ ok: true }), { headers });
+        }
+      }
+    }
+
+    // --- WRITE OPERATIONS (Identity required) ---
     if (request.method === 'POST' || request.method === 'DELETE') {
       const body = await (async () => { try { return await request.json() } catch(e) { return {} } })();
       
@@ -208,22 +231,7 @@ export async function handleRequest(
         return new Response(JSON.stringify({ ok: true }), { headers });
       }
 
-      // --- MODERATION ---
-      if (url.pathname === '/api/mod/bans') {
-        await verifyAdmin(body);
-        if (request.method === 'POST') {
-          await storage.addBan(body.did, body.handle, body.reason || '');
-          return new Response(JSON.stringify({ ok: true }), { headers });
-        }
-        if (request.method === 'DELETE') {
-          await storage.removeBan(body.did);
-          return new Response(JSON.stringify({ ok: true }), { headers });
-        }
-        const bans = await storage.listBans();
-        return new Response(JSON.stringify(bans), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
-      }
-
-      // --- ADMIN ---
+      // ADMIN PROTECTED
       if (url.pathname === '/api/meta') {
         await verifyAdmin(body); await storage.setConfig('server_name', body.name);
         if (cachedConfig) cachedConfig.serverName = body.name;
