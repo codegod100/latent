@@ -26,8 +26,8 @@ let searchTimeout: any = null
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
   clientMetadata: { 
-    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
-    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/'],
+    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/')}&scope=atproto%20transition:generic` : `https://latent.latha.org/client-metadata.json`,
+    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : 'https://latent.latha.org') + '/'],
     scope: 'atproto transition:generic',
     token_endpoint_auth_method: 'none'
   }
@@ -194,7 +194,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; }
+  if (input) { input.value = ''; input.focus(); }
   const resultsEl = document.getElementById('search-results');
   const clearBtn = document.getElementById('clear-search');
   if (resultsEl) resultsEl.style.display = 'none';
@@ -238,6 +238,7 @@ function renderMessages(shouldScrollBottom = true) {
   const resultsEl = document.getElementById('search-results')!
   const clearBtn = document.getElementById('clear-search')!
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
+  
   resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
   resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
   
@@ -350,30 +351,18 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
 
 (window as any).manualBan = async () => {
   const input = document.getElementById('manual-ban-handle') as HTMLInputElement;
+  if (!input) return;
   const handle = input.value.trim();
   if (!handle) return alert('Enter the handle to ban');
-  
   setLoading('#manual-ban-btn', true, 'Resolving...');
   try {
-    // Resolve handle to DID using BlueSky API
     const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`);
     if (!res.ok) throw new Error('Could not resolve handle');
     const { did } = await res.json();
-    
-    log(`Resolved ${handle} to ${did}, banning...`);
     const banRes = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual ban' });
-    if (banRes?.ok) {
-      alert(`Banned @${handle}`);
-      input.value = '';
-      window.refreshBanList();
-    } else {
-      alert('Failed to submit ban to server.');
-    }
-  } catch (err: any) {
-    alert(`Error: ${err.message}`);
-  } finally {
-    setLoading('#manual-ban-btn', false);
-  }
+    if (banRes?.ok) { alert(`Banned @${handle}`); input.value = ''; window.refreshBanList(); }
+    else alert('Failed to submit ban to server.');
+  } catch (err: any) { alert(`Error: ${err.message}`); } finally { setLoading('#manual-ban-btn', false); }
 };
 
 (window as any).unbanUser = async (did: string) => {
@@ -411,12 +400,9 @@ async function showApp(session: any) {
         document.getElementById('user-handle')!.textContent = `@${profile.handle}`;
         await syncServersFromPds(session);
         renderAdminUI();
-        
-        // Handle Join Invite
         const params = new URLSearchParams(window.location.search);
         const inviteCode = params.get('invite');
         if (inviteCode) {
-          log(`Attempting to join server with code: ${inviteCode}`);
           const submitJoin = async (nonce: string | null = null) => {
             const dpop = await getDpopProof(session, 'GET', probeUrl, nonce);
             const res = await fetch(`${currentServer.url}/api/join`, {
@@ -429,9 +415,7 @@ async function showApp(session: any) {
               alert(`Successfully joined ${currentServer.name}!`);
               const cleanUrl = new URL(window.location.href); cleanUrl.searchParams.delete('invite');
               window.history.replaceState({}, '', cleanUrl.toString());
-            } else {
-              alert(`Failed to join: ${data.error || 'Invalid code'}`);
-            }
+            } else { alert(`Failed to join: ${data.error || 'Invalid code'}`); }
           };
           await submitJoin();
         }
@@ -517,7 +501,7 @@ function renderChannelList() {
   const categories = currentServer.categories || []; const channels = currentServer.channels || []; let html = ''
   channels.filter((c: any) => !c.category_id).forEach((c: any) => { html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')"><span class="channel-hash">#</span> ${c.name}${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}</div>` })
   categories.forEach((cat: any) => {
-    html += `<div class="category-item"><span class="category-arrow">▼</span> ${cat.name}${isAdmin() ? `<span class="add-icon" onclick="event.stopPropagation();window.promptAddChannel('${cat.id}')">+</span><span class="delete-icon" onclick="event.stopPropagation();window.deleteCategory('${cat.id}')">×</span>` : ''}</div>`
+    html += `<div class="category-item"><span class="category-arrow">▼</span> ${cat.name}${isAdmin() ? `<span class="add-icon" onclick="event.stopPropagation();window.promptAddChannel('${cat.id}')">+</span><span class="delete-icon" onclick="event.stopPropagation();window.deleteCategory('${cat.id}')">×</span>`:'' }</div>`
     channels.filter((c: any) => c.category_id === cat.id).forEach((c: any) => { html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')"><span class="channel-hash">#</span> ${c.name}${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}</div>` })
   })
   if (isAdmin()) html += `<div class="category-item" onclick="window.addCategory()" style="cursor:pointer; margin-top:10px; color:#5865f2;">+ Add Category</div>`
