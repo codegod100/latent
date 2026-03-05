@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@atproto/lexicon": "^0.6.2",
+    "@atproto/oauth-client-browser": "^0.3.41",
     "@atproto/oauth-client-node": "^0.3.17",
     "@atproto/xrpc-server": "^0.10.15",
     "express": "^5.2.1",
