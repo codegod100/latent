@@ -1,0 +1,245 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+  <title>Latent | Distributed Chat</title>
+  <style>
+    :root {
+      --base: #1e1e2e;
+      --mantle: #181825;
+      --crust: #11111b;
+      --text: #cdd6f4;
+      --subtext0: #a6adc8;
+      --surface0: #313244;
+      --surface1: #45475a;
+      --surface2: #585b70;
+      --blue: #89b4fa;
+      --lavender: #b4befe;
+      --sapphire: #74c7ec;
+      --sky: #89dceb;
+      --teal: #94e2d5;
+      --green: #a6e3a1;
+      --yellow: #f9e2af;
+      --peach: #fab387;
+      --maroon: #eba0ac;
+      --red: #f38ba8;
+      --mauve: #cba6f7;
+      --pink: #f5c2e7;
+      --flamingo: #f2cdcd;
+      --rosewater: #f5e0dc;
+    }
+
+    body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text); height: 100vh; height: 100dvh; overflow: hidden; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--base); }
+    ::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--surface2); }
+    * { scrollbar-width: thin; scrollbar-color: var(--surface1) var(--base); }
+
+    #app-container { display: none; height: 100vh; height: 100dvh; width: 100vw; flex-direction: row; position: relative; overflow: hidden; }
+    
+    #server-sidebar { width: 72px; background: var(--crust); display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; flex-shrink: 0; border-right: 1px solid var(--mantle); z-index: 100; transition: transform 0.3s ease; height: 100%; }
+    .server-icon { width: 48px; height: 48px; border-radius: 50%; background: var(--surface0); color: var(--text); display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; transition: all 0.2s; position: relative; flex-shrink: 0; }
+    .server-icon:hover, .server-icon.active { border-radius: 16px; background: var(--blue); color: var(--crust); }
+    .server-icon.active::before { content: ""; position: absolute; left: -12px; height: 40px; width: 4px; background: var(--text); border-radius: 0 4px 4px 0; }
+    .server-icon.add-server { color: var(--green); }
+    .server-icon.offline { opacity: 0.4; filter: grayscale(1); border: 1px dashed var(--red); }
+
+    #channel-sidebar { width: 240px; background: var(--mantle); display: flex; flex-direction: column; flex-shrink: 0; z-index: 95; transition: transform 0.3s ease; height: 100%; }
+    #server-header { height: 48px; padding: 12px 16px 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--crust); font-weight: bold; flex-shrink: 0; box-sizing: content-box; }
+    #channel-list { flex-grow: 1; overflow-y: auto; padding: 12px 8px; }
+    
+    .category-item { display: flex; align-items: center; padding: 12px 8px 4px 8px; font-size: 12px; color: var(--subtext0); font-weight: bold; text-transform: uppercase; }
+    .category-arrow { font-size: 8px; margin-right: 4px; width: 12px; }
+    
+    .channel-item { display: flex; align-items: center; padding: 8px 8px; border-radius: 4px; cursor: pointer; color: var(--subtext0); margin-bottom: 2px; }
+    .channel-item:hover, .channel-item.active { background: var(--surface1); color: white; }
+    .channel-hash { color: var(--surface2); margin-right: 6px; font-size: 1.2rem; }
+    .add-icon, .delete-icon { margin-left: auto; cursor: pointer; font-size: 14px; padding: 0 4px; opacity: 0.6; }
+
+    #chat-area { flex-grow: 1; display: flex; flex-direction: column; background: var(--base); position: relative; width: 100%; min-width: 0; height: 100%; }
+    #chat-header { height: 48px; padding: 12px 12px 0 12px; display: flex; align-items: center; border-bottom: 1px solid var(--mantle); font-weight: bold; gap: 8px; flex-shrink: 0; box-sizing: content-box; }
+    #message-list { flex-grow: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+    
+    #input-area { padding: 0 16px 24px 16px; flex-shrink: 0; }
+    #reply-bar { display: none; background: var(--surface0); padding: 8px 12px; border-radius: 8px 8px 0 0; border-bottom: 1px solid var(--surface1); align-items: center; justify-content: space-between; font-size: 13px; }
+    #message-input { width: 100%; padding: 12px; background: var(--surface0); border: none; border-radius: 8px; color: var(--text); font-size: 16px; box-sizing: border-box; }
+    #app-container:not(.is-replying) #message-input { border-radius: 8px; }
+    #app-container.is-replying #message-input { border-radius: 0 0 8px 8px; }
+
+    .msg-item { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; border-radius: 4px; transition: background 0.1s; position: relative; }
+    .msg-item:hover { background: rgba(255,255,255,0.02); }
+    .msg-header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .msg-author { color: var(--pink); font-weight: 600; }
+    .msg-date { color: var(--subtext0); font-size: 0.7rem; }
+    .msg-content { color: var(--text); line-height: 1.375; word-break: break-word; }
+    
+    .msg-reply-to { font-size: 12px; color: var(--blue); margin-bottom: -2px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .msg-reply-to:hover { text-decoration: underline; }
+
+    .msg-actions { position: absolute; right: 8px; top: -12px; background: var(--surface0); border: 1px solid var(--surface1); border-radius: 4px; display: none; gap: 4px; padding: 2px 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 10; }
+    .msg-item:hover .msg-actions { display: flex; }
+    .action-btn { cursor: pointer; padding: 2px 4px; border-radius: 2px; font-size: 14px; }
+    .action-btn:hover { background: var(--surface1); }
+
+    .reactions-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .reaction-chip { background: var(--surface0); border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.1s; }
+    .reaction-chip:hover { border-color: var(--surface2); }
+    .reaction-chip.active { background: rgba(137, 180, 250, 0.1); border-color: var(--blue); }
+    .reaction-count { color: var(--subtext0); font-size: 11px; }
+
+    .edit-input { width: 100%; padding: 8px; background: var(--surface0); border: 1px solid var(--blue); border-radius: 4px; color: var(--text); margin-top: 4px; box-sizing: border-box; }
+    .edit-actions { display: flex; gap: 8px; margin-top: 4px; font-size: 12px; }
+    .edit-save { color: var(--green); background: none; border: none; cursor: pointer; font-weight: bold; }
+    .edit-cancel { color: var(--red); background: none; border: none; cursor: pointer; }
+
+    .flash-highlight { animation: flash 3s ease-out; }
+    @keyframes flash { 
+      0% { background: rgba(137, 180, 250, 0.5); outline: 2px solid var(--blue); } 
+      100% { background: transparent; outline: 2px solid transparent; } 
+    }
+
+    /* Search UI */
+    #search-container { position: relative; margin-left: auto; display: flex; align-items: center; gap: 4px; }
+    #search-input { background: var(--crust); border: 1px solid var(--surface0); border-radius: 4px; padding: 4px 24px 4px 8px; color: var(--text); font-size: 13px; width: 140px; transition: width 0.2s; }
+    #search-input:focus { width: 220px; outline: none; border-color: var(--surface2); }
+    #clear-search { position: absolute; right: 8px; cursor: pointer; color: var(--subtext0); font-size: 14px; display: none; }
+    
+    #search-results { display: none; position: absolute; top: 40px; right: 0; width: 340px; max-height: 500px; background: var(--mantle); border: 1px solid var(--surface1); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 200; overflow-y: auto; }
+    .search-result-group { border-bottom: 4px solid var(--crust); padding: 8px 0; cursor: pointer; }
+    .search-result-group:hover { background: var(--surface0); }
+    .search-result-item { padding: 4px 12px; font-size: 12px; opacity: 0.7; }
+    .search-result-item.target { opacity: 1; background: rgba(137, 180, 250, 0.15); border-left: 2px solid var(--blue); }
+    .search-result-header { font-size: 10px; color: var(--subtext0); margin-bottom: 2px; display: flex; justify-content: space-between; }
+    .search-result-location { font-size: 9px; color: var(--mauve); font-weight: bold; text-transform: uppercase; margin-bottom: 4px; padding: 0 12px; }
+    .search-result-content { color: var(--text); word-break: break-word; }
+
+    #mobile-menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; }
+    #mobile-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5); z-index: 90; }
+
+    #admin-menu, #client-settings-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 500; padding: 20px; }
+    .modal-card { background: var(--mantle); width: 100%; max-width: 440px; border-radius: 8px; padding: 24px; border: 1px solid var(--surface0); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+    .admin-input { width: 100%; padding: 12px; background: var(--base); border: 1px solid var(--surface0); border-radius: 4px; color: var(--text); box-sizing: border-box; font-size: 16px; }
+    .admin-save-btn { width: 100%; padding: 12px; background: var(--blue); color: var(--crust); border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 12px; }
+
+    #login-panel, #loading-panel { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--base); z-index: 1000; }
+    .login-card { background: var(--mantle); padding: 32px; border-radius: 8px; width: 90%; max-width: 400px; text-align: center; border: 1px solid var(--surface0); }
+    
+    #user-info { margin-top: auto; padding: 12px; background: var(--crust); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    #user-handle { font-size: 0.8rem; font-weight: bold; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--subtext0); }
+    .big-spinner { border: 4px solid var(--surface0); border-top: 4px solid var(--blue); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    #jump-to-present { display: none; position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--blue); color: var(--crust); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; cursor: pointer; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: all 0.2s; }
+    #jump-to-present:hover { background: var(--lavender); transform: translateX(-50%) translateY(-2px); }
+
+    @media (max-width: 768px) {
+      #mobile-menu-btn { display: block; }
+      #server-sidebar { position: absolute; left: 0; top: 0; bottom: 0; transform: translateX(-100%); z-index: 110; }
+      #channel-sidebar { position: absolute; left: 72px; top: 0; bottom: 0; transform: translateX(-150%); width: calc(100% - 100px); max-width: 280px; z-index: 105; }
+      #app-container.menu-open #server-sidebar, #app-container.menu-open #channel-sidebar { transform: translateX(0); }
+      #app-container.menu-open #mobile-overlay { display: block; }
+      #input-area { padding: 0 8px 12px 8px; }
+      #chat-header { height: auto; flex-wrap: wrap; padding-bottom: 8px; }
+      #search-container { width: 100%; margin-top: 8px; order: 3; }
+      #search-input { width: 100% !important; }
+      #search-results { width: calc(100vw - 32px); right: -12px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading-panel">
+    <div class="loading-container">
+      <div class="big-spinner"></div>
+      <div style="color: var(--mauve); font-weight: bold; margin-top: 8px;">Latent</div>
+      <div id="load-msg" style="color: var(--subtext0); font-size: 12px;">Syncing identity...</div>
+    </div>
+  </div>
+
+  <div id="login-panel" style="display:none">
+    <div class="login-card">
+      <h2 style="color: var(--mauve); margin-top: 0;">Latent</h2>
+      <p style="color: var(--subtext0); font-size: 14px;">A zero-trust distributed chat platform.</p>
+      <input id="handle" class="admin-input" style="margin: 20px 0;" placeholder="your-handle.bsky.social">
+      <button onclick="startLogin()" class="admin-save-btn" style="background: var(--mauve); margin-top: 0;">Log In</button>
+    </div>
+  </div>
+
+  <div id="app-container">
+    <div id="mobile-overlay" onclick="toggleMenu(false)"></div>
+    <div id="server-sidebar"></div>
+    <div id="channel-sidebar">
+      <div id="server-header">
+        <span id="current-server-name" style="color: var(--lavender);">...</span>
+        <button id="admin-tools" onclick="toggleAdminMenu()" style="display:none; background:none; border:none; color:var(--subtext0); cursor:pointer; font-size: 18px;">⚙</button>
+      </div>
+      <div id="channel-list"></div>
+      <div id="user-info">
+        <div id="user-handle">...</div>
+        <button onclick="logout()" style="background:none; border:none; color:var(--red); cursor:pointer; font-size:12px; font-weight:bold; margin-left: auto;">Logout</button>
+      </div>
+    </div>
+
+    <div id="chat-area">
+      <div id="chat-header">
+        <button id="mobile-menu-btn" onclick="toggleMenu(true)">☰</button>
+        <span class="channel-hash">#</span>
+        <span id="current-channel-name" style="color: var(--text); flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">...</span>
+        
+        <div id="search-container">
+          <input id="search-input" placeholder="Search..." autocomplete="off">
+          <span id="clear-search" onclick="window.clearSearch()">×</span>
+          <div id="search-results"></div>
+        </div>
+      </div>
+
+      <div id="message-list"></div>
+      <div id="jump-to-present" onclick="window.jumpToPresent()">↓ Jump to Present</div>
+      
+      <div id="input-area">
+        <div id="reply-bar">
+          <span id="reply-text">Replying to @user</span>
+          <span style="cursor:pointer;" onclick="window.cancelReply()">×</span>
+        </div>
+        <input id="message-input" placeholder="Message" autocomplete="off">
+      </div>
+
+      <!-- Admin Menu -->
+      <div id="admin-menu" style="display:none">
+        <div class="modal-card">
+          <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin:0; color: var(--blue);">Server Settings</h2>
+            <div style="cursor:pointer; font-size: 24px;" onclick="toggleAdminMenu()">×</div>
+          </div>
+          <div style="margin-bottom: 20px;">
+            <label style="display:block; font-size: 12px; color: var(--subtext0); text-transform: uppercase; margin-bottom: 8px; font-weight: bold;">Server Name</label>
+            <input id="new-server-name" class="admin-input">
+          </div>
+          <button id="admin-save-btn" onclick="saveServerConfig()" class="admin-save-btn">Save Changes</button>
+          <hr style="border:0; border-top:1px solid var(--surface1); margin: 20px 0;">
+          <button onclick="addCategory()" class="admin-save-btn" style="background:var(--surface1); color: var(--text);">+ Add Category</button>
+          <button onclick="promptAddChannel()" class="admin-save-btn" style="background:var(--surface1); color: var(--text);">+ Add Channel</button>
+        </div>
+      </div>
+
+      <!-- Client Settings -->
+      <div id="client-settings-modal" style="display:none">
+        <div class="modal-card">
+          <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin:0; color: var(--green);">Server Connections</h2>
+            <div style="cursor:pointer; font-size: 24px;" onclick="toggleClientSettings()">×</div>
+          </div>
+          <p style="color:var(--subtext0); font-size:14px;">Enter backend worker URLs (one per line).</p>
+          <textarea id="server-urls-input" class="admin-input" style="height:120px; font-family:monospace; resize:none;"></textarea>
+          <button id="client-save-btn" onclick="saveClientSettings()" class="admin-save-btn" style="background:var(--green); color: var(--crust);">Apply & Restart</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/bundle.js"></script>
+</body>
+</html>

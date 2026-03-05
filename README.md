@@ -1,61 +1,74 @@
-# Zero-Trust ATProto Identity Proxy
+# Latent: Zero-Trust Distributed Chat
 
-This project demonstrates a **Zero-Trust Architecture** for authenticating users via the AT Protocol (Bluesky) on unowned or untrusted third-party servers. 
+Latent is a decentralized, high-performance chat platform where **Identity is Sovereign** (powered by ATProto) and **Storage is Distributed** (independent backends).
 
-## The Core Theory
-
-In traditional OAuth, a "Trusted Backend" handles the session, stores the private keys, and manages the tokens. In this project, we invert that model. We treat the backend as a **Stateless Messenger** and the browser as the **Sole Sovereign** of the user's identity.
-
-### 1. Public Client vs. Confidential Client
-- **Confidential Client (Standard)**: The server owns the private keys. If the server is compromised, all user sessions are at risk.
-- **Public Client (This Project)**: The **Browser** generates an asymmetric ES256 key pair via the WebCrypto API. The private key never leaves the browser's IndexedDB. The token issued by the PDS is cryptographically bound to **this specific browser key**.
-
-### 2. DPoP (Demonstrating Proof-of-Possession)
-The heart of this system is **DPoP (RFC 9449)**. Unlike standard Bearer tokens which can be stolen and reused, a DPoP-bound token is useless without a matching "Proof."
-
-A **DPoP Proof** is a short-lived JWT signed by the browser that includes:
-- `htm`: The HTTP method (e.g., GET)
-- `htu`: The exact URL being called (e.g., the PDS verification endpoint)
-- `ath`: A hash of the Access Token itself
-- `jkt`: The thumbprint of the browser's public key
-
-### 3. The Identity Proxy Handshake
-To "log in" to an untrusted server without giving it your session, the following sequence occurs:
-
-1. **Sign**: The Browser creates a DPoP proof signed specifically for the PDS `getProfile` endpoint.
-2. **Relay**: The Browser sends its **Access Token** and this **Proof** to the untrusted Backend.
-3. **Verify**: The Backend (which has no ATProto auth code) simply "proxies" these credentials to the user's PDS.
-4. **Confirm**: The PDS acts as a global "Identity Notary." If the PDS returns `200 OK`, the Backend is mathematically certain that the request came from the person who owns that DID, because only they could have signed that specific proof.
-
-## Architecture
-
-The project is split into two isolated Cloudflare projects to ensure zero shared state:
-
-### Frontend (`packages/client`)
-- **Host**: Cloudflare Pages (Static)
-- **Library**: `@atproto/oauth-client-browser`
-- **Role**: Key management, OAuth dance, signing identity proofs.
-- **Storage**: Browser-local only (IndexedDB).
-
-### Backend (`packages/server`)
-- **Host**: Cloudflare Worker
-- **Storage**: Cloudflare D1 (SQLite)
-- **Role**: Stateless relay and authorized storage. It only saves data to the database **after** the PDS confirms the user's identity via the relayed proof.
-
-## Why this matters
-This pattern allows for the creation of decentralized applications where you can interact with any number of "unowned" servers (message boards, games, analytics) using your single ATProto identity, without those servers ever being able to "impersonate" you or steal your account.
+This repository is designed for multi-platform flexibility. You can host your own client on any static provider and your own backend on Cloudflare or any Docker-compatible host.
 
 ---
 
-## Development
+## 🏗 Deployment Guide
+
+### 1. The Client (Static Hosting)
+The client is a single-page application (SPA). You can deploy it to any provider that supports static assets.
+
+#### **Cloudflare Pages (Recommended)**
+1. Ensure `wrangler` is installed.
+2. Run: `bun run deploy:client`
+3. Configure your custom domain in the Cloudflare Dashboard.
+
+#### **Netlify**
+1. Ensure `netlify-cli` is installed.
+2. Run: `bun run deploy:client-netlify`
+3. This uses the pre-configured `packages/client-netlify/netlify.toml` for SPA routing.
+
+---
+
+### 2. The Backend (Distributed Storage)
+Latent backends are stateless identity relays. They verify users via DPoP proofs and store message data locally.
+
+#### **Cloudflare Workers (D1 + Durable Objects)**
+Ideal for low-cost, global edge distribution.
+1. `cd packages/server`
+2. Update `wrangler.toml` with your account details and D1 database ID.
+3. Run: `bun x wrangler deploy`
+4. *Note:* Real-time WebSockets are powered by Durable Objects.
+
+#### **Docker / Bun (SQLite)**
+Ideal for self-hosting on VPS, Fly.io, or Railway.
+1. `cd packages/server-docker`
+2. **Fly.io Deployment**:
+   - `fly launch` (first time)
+   - `fly deploy --remote-only --yes --config fly.toml --dockerfile Dockerfile`
+3. This implementation uses a local `data.db` SQLite file. Ensure you have a persistent volume mounted at `/app/data`.
+
+---
+
+### 3. Identity Configuration (ATProto)
+To allow users to log in via BlueSky/ATProto, you must host a valid `client-metadata.json` at your production origin.
+
+1. Edit `client-metadata.json` in the project root.
+2. Update `client_id` and `redirect_uris` to match your domain (e.g., `https://chat.example.com/`).
+3. Deploy the client; the file will be served at `your-domain.com/client-metadata.json`.
+
+---
+
+## 🛠 Local Development
 
 ### Prerequisites
 - [Bun](https://bun.sh)
-- [Wrangler](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (Cloudflare CLI)
+- [Wrangler](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (for Cloudflare testing)
 
 ### Commands
-- `bun run build`: Bundle the frontend client.
-- `bun run dev:client`: Start local Pages server (Port 3010).
-- `bun run dev:server`: Start local Worker server (Port 8787).
-- `bun run deploy:client`: Deploy to Cloudflare Pages.
-- `bun run deploy:server`: Deploy to Cloudflare Workers.
+| Command | Description |
+| :--- | :--- |
+| `bun run dev:client` | Start the frontend on `http://127.0.0.1:3010` |
+| `bun run dev:docker` | Start the local Bun/SQLite backend on port `8789` |
+| `bun run dev:server` | Start local Cloudflare Worker backend on port `8787` |
+| `bun run build` | Build the frontend production bundle |
+
+---
+
+## 🔒 Security Mandates
+- **Stateless Verification**: Backends never store private keys. They verify identity by relaying browser-signed proofs to the user's PDS.
+- **DPoP Compliance**: All API calls are secured with DPoP-bound tokens.
+- **Stateless Sessions**: Servers issue short-lived (24hr) session tokens after the first DPoP verification to maximize speed without compromising security.
