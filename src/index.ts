@@ -1,4 +1,5 @@
 import express from 'express'
+import { randomUUID } from 'node:crypto'
 import {
   NodeOAuthClient,
   type NodeSavedSession,
@@ -11,35 +12,50 @@ const APP_ORIGIN = `http://127.0.0.1:${PORT}`
 const REDIRECT_URI = `${APP_ORIGIN}/callback`
 const SESSION_COOKIE = 'atproto_did'
 
-// ATProto Loopback Client ID
-const clientMetadata = {
-  client_id: `http://localhost/?redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=atproto%20transition:generic`,
-  client_name: 'Multi-Server Identity Proxy',
-  application_type: 'web' as const,
-  token_endpoint_auth_method: 'none' as const,
-  dpop_bound_access_tokens: true,
-  grant_types: ['authorization_code', 'refresh_token'],
-  response_types: ['code'],
-  redirect_uris: [REDIRECT_URI],
-  scope: 'atproto transition:generic',
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+
+// 2. STORES (File-based for persistence across restarts)
+const SESSION_FILE = path.resolve('sessions.json')
+const STATE_FILE = path.resolve('states.json')
+
+function loadMap(file: string) {
+  if (!fs.existsSync(file)) return new Map()
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return new Map(Object.entries(data))
+  } catch (e) { return new Map() }
 }
 
-// 2. STORES (Memory)
-const stateStore = new Map<string, NodeSavedState>()
-const sessionStore = new Map<string, NodeSavedSession>()
+function saveMap(file: string, map: Map<string, any>) {
+  fs.writeFileSync(file, JSON.stringify(Object.fromEntries(map), null, 2))
+}
+
+const stateStoreMap = loadMap(STATE_FILE)
+const sessionStoreMap = loadMap(SESSION_FILE)
 
 const oauthClient = new NodeOAuthClient({
   allowHttp: true,
-  clientMetadata,
+  clientMetadata: {
+    client_id: `http://localhost/?redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=atproto%20transition:generic`,
+    client_name: 'ATProto Identity Proxy',
+    application_type: 'web',
+    token_endpoint_auth_method: 'none',
+    dpop_bound_access_tokens: true,
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    redirect_uris: [REDIRECT_URI],
+    scope: 'atproto transition:generic',
+  },
   stateStore: {
-    set: async (k, v) => { stateStore.set(k, v) },
-    get: async (k) => stateStore.get(k),
-    del: async (k) => { stateStore.delete(k) },
+    set: async (k, v) => { stateStoreMap.set(k, v); saveMap(STATE_FILE, stateStoreMap) },
+    get: async (k) => stateStoreMap.get(k),
+    del: async (k) => { stateStoreMap.delete(k); saveMap(STATE_FILE, stateStoreMap) },
   },
   sessionStore: {
-    set: async (k, v) => { sessionStore.set(k, v) },
-    get: async (k) => sessionStore.get(k),
-    del: async (k) => { sessionStore.delete(k) },
+    set: async (k, v) => { sessionStoreMap.set(k, v); saveMap(SESSION_FILE, sessionStoreMap) },
+    get: async (k) => sessionStoreMap.get(k),
+    del: async (k) => { sessionStoreMap.delete(k); saveMap(SESSION_FILE, sessionStoreMap) },
   },
 })
 
@@ -51,17 +67,15 @@ const getSessionDid = (req: express.Request) => {
   return cookie ? decodeURIComponent(cookie.split('=')[1]) : null
 }
 
-// 3. ROUTES
+// 2. ROUTES
 app.get('/', (req, res) => {
-  const did = getSessionDid(req)
-  if (did) return res.redirect('/app')
+  if (getSessionDid(req)) return res.redirect('/app')
   res.send(`
     <body style="font-family:system-ui; padding:2rem; max-width:400px; margin:auto;">
-      <h1>ATProto Identity Gateway</h1>
-      <p>Log in once here to use your identity across multiple servers.</p>
-      <form method="POST" action="/login">
-        <input name="handle" placeholder="nandi.latha.org" required style="width:100%; padding:0.5rem; margin-bottom:1rem;">
-        <button type="submit" style="width:100%; padding:0.5rem; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">Login</button>
+      <h1>ATProto Identity Proxy</h1>
+      <form method="POST" action="/login" style="display:flex; flex-direction:column; gap:1rem;">
+        <input name="handle" placeholder="your-handle.bsky.social" required style="padding:0.5rem;">
+        <button type="submit" style="padding:0.5rem; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">Login</button>
       </form>
     </body>
   `)
@@ -83,6 +97,51 @@ app.get('/callback', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// 3. THE PROXY LOGIC: Generate a proof for an External Server
+app.get('/api/get-external-proof', async (req, res, next) => {
+  const did = getSessionDid(req)
+  const targetUrl = req.query.url as string
+  const nonce = req.query.nonce as string | undefined
+  if (!did || !targetUrl) return res.status(400).json({ error: 'Missing session or target url' })
+
+  try {
+    const session = await oauthClient.restore(did)
+    const tokenSet = await (session as any).getTokenSet('auto')
+    
+    // Manual proof generation using the session's internal key
+    const key = (session as any).server.dpopKey
+    // Filter for a signing algorithm (DPoP requires signing, not encryption like ECDH-ES)
+    const alg = key.algorithms.find((a: string) => a.startsWith('ES') || a.startsWith('RS')) || 'ES256'
+    const jwk = key.bareJwk
+    const now = Math.floor(Date.now() / 1000)
+    
+    // Calculate Access Token Hash (ath)
+    const { createHash } = await import('node:crypto')
+    const ath = createHash('sha256').update(tokenSet.access_token).digest('base64url')
+
+    const dpopJwt = await key.createJwt(
+      { alg, typ: 'dpop+jwt', jwk },
+      {
+        iat: now,
+        jti: randomUUID(),
+        htm: 'GET',
+        htu: targetUrl.split('?')[0].split('#')[0],
+        ath,
+        nonce // Include the nonce if provided
+      }
+    )
+
+    res.json({
+      accessToken: tokenSet.access_token,
+      dpopProof: dpopJwt,
+      pdsUrl: String(tokenSet.aud).replace(/\/+$/, ''), // Strip trailing slashes
+      did: session.did
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 app.get('/app', async (req, res) => {
   const did = getSessionDid(req)
   if (!did) return res.redirect('/')
@@ -91,29 +150,71 @@ app.get('/app', async (req, res) => {
     const session = await oauthClient.restore(did)
     res.send(`
       <body style="font-family:system-ui; padding:2rem; max-width:600px; margin:auto;">
-        <h1>Gateway Active</h1>
+        <h1>Client Gateway Active</h1>
         <p>Logged in as: <code>${session.did}</code></p>
-        <p>PDS: <code>${session.serverMetadata.issuer}</code></p>
         
-        <div style="border:1px solid #ccc; padding:1rem; border-radius:8px; background:#f9f9f9;">
-          <h3>Proxy Action</h3>
-          <p>The button below calls a <strong>Non-ATProto Endpoint</strong> on this server. This server then proxies the request to your PDS to verify you.</p>
-          <button id="proxyBtn" style="padding:0.5rem 1rem; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer;">
-            Verify Identity (Backend Relay)
+        <div style="border:1px solid #ccc; padding:1.5rem; border-radius:8px; background:#f9f9f9;">
+          <h3>Connect to External "Unowned" Server</h3>
+          <p>The button below calls a <strong>Non-ATProto Server</strong> endpoint. Our backend provides the signed identity proof.</p>
+          <button id="callBtn" style="padding:0.7rem 1.5rem; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer;">
+            Prove Identity to External Server
           </button>
         </div>
         <br>
         <a href="/logout">Logout</a>
-        <pre id="log" style="background:#111; color:#0f0; padding:1rem; border-radius:4px; margin-top:1rem; display:none;"></pre>
+        <pre id="log" style="background:#111; color:#0f0; padding:1rem; border-radius:4px; margin-top:1rem; display:none; overflow:auto;"></pre>
 
         <script>
-          document.getElementById('proxyBtn').onclick = async () => {
+          document.getElementById('callBtn').onclick = async () => {
             const el = document.getElementById('log');
             el.style.display = 'block';
-            el.textContent = 'Calling proxy...';
-            const res = await fetch('/api/proxy-verify');
-            const data = await res.json();
-            el.textContent = JSON.stringify(data, null, 2);
+            el.textContent = '1. Requesting signed proof for external server...\\n';
+            
+            // The external server's verification endpoint
+            const targetUrl = '${APP_ORIGIN}/api/mock-external-verify';
+            
+            const verify = async (nonce = null) => {
+              // 1. Get credentials and signed proof for the SPECIFIC verification endpoint
+              // Note: the backend handles the mapping now
+              const probeUrlBase = '/api/get-external-proof?url=';
+              
+              // We need to know the target PDS endpoint to sign for it
+              // For the demo, we'll get the metadata first
+              const credsRes = await fetch('/api/get-external-proof?url=' + encodeURIComponent('placeholder'));
+              const initialCreds = await credsRes.json();
+              
+              const actualProbeUrl = initialCreds.pdsUrl + '/xrpc/app.bsky.actor.getProfile?actor=' + initialCreds.did;
+              
+              const finalUrl = '/api/get-external-proof?url=' + encodeURIComponent(actualProbeUrl) + (nonce ? '&nonce=' + encodeURIComponent(nonce) : '');
+              const proofRes = await fetch(finalUrl);
+              const creds = await proofRes.json();
+              
+              el.textContent += '2. Sending proof to external server...\\n';
+              
+              const res = await fetch('/api/mock-external-verify', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(creds)
+              });
+              
+              const data = await res.json();
+              
+              if (!res.ok && data.pds_response?.error === 'use_dpop_nonce') {
+                const newNonce = data.pds_response.dpopNonce || res.headers.get('dpop-nonce');
+                if (newNonce) {
+                  el.textContent += 'Challenge: Nonce received, retrying...\\n';
+                  return verify(newNonce);
+                }
+              }
+              
+              el.textContent += '3. Final Response:\\n' + JSON.stringify(data, null, 2);
+            };
+
+            try {
+              await verify();
+            } catch (e) {
+              el.textContent += 'Error: ' + e.message;
+            }
           };
         </script>
       </body>
@@ -121,25 +222,39 @@ app.get('/app', async (req, res) => {
   } catch (err) { res.redirect('/logout') }
 })
 
-// 4. THE PROXY ENDPOINT
-// This is your "Non-ATProto" logic. It uses the library to safely
-// verify the user with the PDS without exposing raw tokens to the browser.
-app.get('/api/proxy-verify', async (req, res) => {
-  const did = getSessionDid(req)
-  if (!did) return res.status(401).json({ error: 'Auth required' })
-
+app.post('/api/mock-external-verify', async (req, res) => {
+  const { accessToken, dpopProof, pdsUrl, did } = req.body
+  
   try {
-    console.log(`[proxy] Verifying session for ${did}`)
-    const session = await oauthClient.restore(did)
+    // We use a resource-level endpoint (getProfile) to verify the token.
+    // This is more reliable for OAuth tokens than getSession.
+    const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${did}`
+    console.log('[external-server] probing URL: ' + probeUrl)
     
-    // The library handles DPoP, nonces, and binding automatically here!
-    const pdsRes = await session.fetchHandler('/xrpc/com.atproto.server.getSession')
-    const data = await pdsRes.json()
+    const pdsRes = await fetch(probeUrl, {
+      headers: { 
+        'Authorization': `DPoP ${accessToken}`,
+        'DPoP': dpopProof 
+      }
+    })
+    
+    console.log('[external-server] PDS response status: ' + pdsRes.status + ' content-type: ' + pdsRes.headers.get('content-type'))
+    
+    const dpopNonce = pdsRes.headers.get('dpop-nonce')
+    const contentType = pdsRes.headers.get('content-type') || ''
+    
+    if (!contentType.includes('application/json')) {
+      const text = await pdsRes.text()
+      console.error('[external-server] PDS returned non-JSON: ' + text.slice(0, 200))
+      return res.status(500).json({ error: 'PDS returned non-JSON response', status: pdsRes.status, preview: text.slice(0, 100) })
+    }
 
-    res.json({
-      ok: pdsRes.ok,
-      message: 'Identity verified by PDS',
-      user: data
+    const data = await pdsRes.json()
+    
+    res.status(pdsRes.status).json({
+      external_server_verified: pdsRes.ok,
+      identity: pdsRes.ok ? { did: data.did, handle: data.handle } : null,
+      pds_response: { ...data, dpopNonce }
     })
   } catch (err) {
     res.status(500).json({ error: String(err) })
@@ -151,4 +266,9 @@ app.get('/logout', (req, res) => {
   res.redirect('/')
 })
 
-app.listen(PORT, '127.0.0.1', () => console.log(`Server running at http://127.0.0.1:${PORT}`))
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[server error]', err)
+  res.status(500).json({ error: String(err), stack: err.stack })
+})
+
+app.listen(PORT, '127.0.0.1', () => console.log(`Server running at ${APP_ORIGIN}`))
