@@ -19,14 +19,14 @@ let currentUserDid: string | null = null
 let currentMessages: any[] = []
 let ws: WebSocket | null = null
 
-const CLIENT_URL = IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin
-const CLIENT_ID = IS_LOCAL 
-  ? `http://localhost/?redirect_uri=${encodeURIComponent(CLIENT_URL + '/')}&scope=atproto%20transition:generic`
-  : `${CLIENT_URL}/client-metadata.json`
-
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
-  clientMetadata: { client_id: CLIENT_ID, redirect_uris: [CLIENT_URL + '/'], scope: 'atproto transition:generic', token_endpoint_auth_method: 'none' }
+  clientMetadata: { 
+    client_id: IS_LOCAL ? `http://localhost/?redirect_uri=${encodeURIComponent((IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/')}&scope=atproto%20transition:generic` : `${window.location.origin}/client-metadata.json`,
+    redirect_uris: [(IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin) + '/'],
+    scope: 'atproto transition:generic',
+    token_endpoint_auth_method: 'none'
+  }
 })
 
 const log = (m: string, obj?: any) => {
@@ -66,28 +66,24 @@ async function fetchWithTimeout(resource: string, options: any = {}) {
 function setupWebSocket() {
   if (ws) { ws.close(); ws = null; }
   if (!currentServer || !currentChannel || currentServer.error) return;
-  
-  // Only connect if the server explicitly supports WebSockets
-  if (!currentServer.features?.ws) {
-    log(`Server ${currentServer.host} does not support WebSockets. Falling back to polling.`);
-    return;
-  }
+  if (!currentServer.features?.ws) return;
 
   const protocol = currentServer.url.startsWith('https') ? 'wss' : 'ws';
   const wsUrl = `${currentServer.url.replace(/^https?/, protocol)}/api/ws?channelId=${currentChannel.id}`;
   
-  log(`Connecting to WebSocket: ${wsUrl}`);
   ws = new WebSocket(wsUrl);
-
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'new_message') {
-        // Only add if not already in list
-        if (!currentMessages.some(m => m.id === data.message.id)) {
+        const existingIdx = currentMessages.findIndex(m => m.id === data.message.id);
+        if (existingIdx !== -1) {
+          // Replace optimistic message with authoritative one
+          currentMessages[existingIdx] = data.message;
+        } else {
           currentMessages.unshift(data.message);
-          renderMessages();
         }
+        renderMessages();
       } else if (data.type === 'edit_message') {
         const idx = currentMessages.findIndex(m => m.id === data.message.id);
         if (idx !== -1) {
@@ -97,13 +93,7 @@ function setupWebSocket() {
       }
     } catch (e) { log('WS Message error', e) }
   };
-
-  ws.onclose = () => {
-    log('WebSocket closed. Reconnecting in 3s...');
-    setTimeout(setupWebSocket, 3000);
-  };
-
-  ws.onerror = (e) => { log('WebSocket error', e); };
+  ws.onclose = () => setTimeout(setupWebSocket, 3000);
 }
 
 // --- CRYPTO HELPER ---
@@ -138,7 +128,6 @@ async function pdsFetch(session: any, url: string, init: RequestInit = {}) {
 
 async function init() {
   try {
-    loadMsg('Initializing OAuth...')
     const result = await client.init()
     if (result?.session) {
       const returnPath = sessionStorage.getItem('latent_return_path')
@@ -164,7 +153,6 @@ async function init() {
 async function hydrateServers() {
   const pathParts = window.location.pathname.split('/').filter(Boolean)
   const targetHost = pathParts[0]
-
   if (targetHost && !SERVER_URLS.some(u => new URL(u).host === targetHost)) {
     try {
       const proto = targetHost.includes('127.0.0.1') ? 'http' : 'https'
@@ -180,7 +168,6 @@ async function hydrateServers() {
       }
     } catch (e) {}
   }
-
   SERVERS = await Promise.all(SERVER_URLS.map(async (url) => {
     try {
       const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 3000 })
@@ -192,7 +179,6 @@ async function hydrateServers() {
       return { id: host, name: 'Offline Server', url, host, error: true, categories: [], channels: [] }
     }
   }))
-
   if (targetHost) currentServer = SERVERS.find(s => s.host === targetHost)
   if (!currentServer) currentServer = SERVERS[0]
   if (currentServer && !currentServer.error) {
@@ -207,8 +193,7 @@ async function hydrateServers() {
 async function syncServersFromPds(session: any) {
   loadMsg('Syncing servers from PDS...')
   try {
-    const tokens = await session.getTokenSet()
-    const pdsUrl = tokens.aud.replace(/\/+$/, '')
+    const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, '')
     const res = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
     const data = await res.json()
     let pdsUrls = data.records?.map((r: any) => r.value.url) || []
@@ -246,29 +231,19 @@ function renderChannelList() {
   const channels = currentServer.channels || []
   let html = ''
   channels.filter((c: any) => !c.category_id).forEach((c: any) => {
-    html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')">
-      <span class="channel-hash">#</span> ${c.name}
-      ${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}
-    </div>`
+    html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')"><span class="channel-hash">#</span> ${c.name}${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}</div>`
   })
   categories.forEach((cat: any) => {
-    html += `<div class="category-item"><span class="category-arrow">▼</span> ${cat.name}
-      ${isAdmin() ? `<span class="add-icon" onclick="event.stopPropagation();window.promptAddChannel('${cat.id}')">+</span><span class="delete-icon" onclick="event.stopPropagation();window.deleteCategory('${cat.id}')">×</span>` : ''}
-    </div>`
+    html += `<div class="category-item"><span class="category-arrow">▼</span> ${cat.name}${isAdmin() ? `<span class="add-icon" onclick="event.stopPropagation();window.promptAddChannel('${cat.id}')">+</span><span class="delete-icon" onclick="event.stopPropagation();window.deleteCategory('${cat.id}')">×</span>` : ''}</div>`
     channels.filter((c: any) => c.category_id === cat.id).forEach((c: any) => {
-      html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')">
-        <span class="channel-hash">#</span> ${c.name}
-        ${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}
-      </div>`
+      html += `<div class="channel-item ${currentChannel?.id === c.id ? 'active' : ''}" onclick="window.selectChannel('${c.id}')"><span class="channel-hash">#</span> ${c.name}${isAdmin() ? `<span class="delete-icon" onclick="event.stopPropagation();window.deleteChannel('${c.id}')">×</span>` : ''}</div>`
     })
   })
   if (isAdmin()) html += `<div class="category-item" onclick="window.addCategory()" style="cursor:pointer; margin-top:10px; color:#5865f2;">+ Add Category</div>`
   list.innerHTML = html
 }
 
-function linkify(text: string) {
-  return text.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: underline;">$1</a>')
-}
+function linkify(text: string) { return text.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: underline;">$1</a>') }
 
 async function refreshMessages() {
   const container = document.getElementById('message-list')!
@@ -292,7 +267,7 @@ function renderMessages() {
           <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
           ${m.did === currentUserDid ? `<span class="edit-link" onclick="window.enterEditMode('${m.id}')">edit</span>` : ''}
         </div>
-        <div class="msg-content" id="msg-content-${m.id}">${linkify(m.content)}</div>
+        <div class="msg-content" id="msg-content-${m.id}" style="${m.optimistic ? 'opacity: 0.5;' : ''}">${linkify(m.content)}</div>
       </div>
     `).reverse().join('')
   container.scrollTop = container.scrollHeight
@@ -308,21 +283,17 @@ function renderMessages() {
 (window as any).selectServer = (host: string) => {
   const server = SERVERS.find(s => s.host === host)
   if (server) {
-    currentServer = server
-    currentChannel = server.channels?.[0] || null
+    currentServer = server; currentChannel = server.channels?.[0] || null
     window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`)
-    renderAll()
-    if (window.innerWidth <= 768) (window as any).toggleMenu(true)
+    renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(true)
   }
 };
 
 (window as any).selectChannel = (id: string) => {
   const chan = currentServer.channels.find((c: any) => c.id === id)
   if (chan) {
-    currentChannel = chan
-    window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`)
-    renderAll()
-    if (window.innerWidth <= 768) (window as any).toggleMenu(false)
+    currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`)
+    renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false)
   }
 };
 
@@ -333,8 +304,7 @@ function renderMessages() {
   contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" />
     <div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button>
     <button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`
-  const input = document.getElementById(`edit-input-${id}`) as HTMLInputElement
-  input.focus()
+  document.getElementById(`edit-input-${id}`)?.focus()
 };
 
 (window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
@@ -347,17 +317,9 @@ function renderMessages() {
   const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
-    const res = await fetch(`${currentServer.url}/api/edit-message`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id, content, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
-    })
-    const data = await res.json()
-    if (data.isChallenge) return submit(data.dpopNonce)
-    setLoading(`#edit-save-${id}`, false)
-    if (res.ok) {
-      // Logic handled via WebSocket broadcast if online, but let's refresh locally just in case
-      refreshMessages()
-    }
+    const res = await fetch(`${currentServer.url}/api/edit-message`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, content, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) })
+    const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce)
+    setLoading(`#edit-save-${id}`, false); if (res.ok) refreshMessages()
   }
   await submit()
 };
@@ -369,24 +331,13 @@ function renderMessages() {
 };
 
 (window as any).saveClientSettingsDirect = async (newUrls: string[]) => {
-  const session = (window as any).atprotoSession
-  if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
+  const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
   try {
     const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, '')
     const listRes = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
     const existing = await listRes.json()
-    for (const record of (existing.records || [])) {
-      await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey: record.uri.split('/').pop() })
-      })
-    }
-    for (const url of newUrls) {
-      await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() } })
-      })
-    }
+    for (const record of (existing.records || [])) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey: record.uri.split('/').pop() }) }) }
+    for (const url of newUrls) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() } }) }) }
   } catch (e) { log('PDS save failed', e) }
 };
 
@@ -394,29 +345,20 @@ function renderMessages() {
   setLoading('#client-settings-modal .admin-save-btn', true, 'Syncing...')
   const input = (document.getElementById('server-urls-input') as HTMLTextAreaElement).value
   const newUrls = input.split('\n').map(u => u.trim()).filter(Boolean)
-  await (window as any).saveClientSettingsDirect(newUrls)
-  location.href = '/'
+  await (window as any).saveClientSettingsDirect(newUrls); location.href = '/'
 };
 
 async function showApp(session: any) {
-  (window as any).atprotoSession = session
-  currentUserDid = session.did
+  (window as any).atprotoSession = session; currentUserDid = session.did
   const fetchProfile = async () => {
     try {
       const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, '')
       const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
       const res = await pdsFetch(session, probeUrl); const profile = await res.json()
-      if (profile.handle) {
-        currentUserHandle = profile.handle
-        document.getElementById('user-handle')!.textContent = `@${profile.handle}`
-        await syncServersFromPds(session)
-        renderAdminUI() 
-      }
+      if (profile.handle) { currentUserHandle = profile.handle; document.getElementById('user-handle')!.textContent = `@${profile.handle}`; await syncServersFromPds(session); renderAdminUI() }
     } catch (e) { log('Profile failed', e) }
   }
-  await fetchProfile()
-  document.getElementById('loading-panel')!.style.display = 'none'
-  document.getElementById('app-container')!.style.display = 'flex'
+  await fetchProfile(); document.getElementById('loading-panel')!.style.display = 'none'; document.getElementById('app-container')!.style.display = 'flex'
 }
 
 const isAdmin = () => currentUserHandle && currentServer?.adminHandle === currentUserHandle
@@ -438,12 +380,8 @@ async function adminFetch(endpoint: string, method: string, body: any) {
   const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
-    const res = await fetch(`${currentServer.url}${endpoint}`, {
-      method, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
-    })
-    const data = await res.json()
-    if (data.isChallenge) return submit(data.dpopNonce)
+    const res = await fetch(`${currentServer.url}${endpoint}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did }) })
+    const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce)
     return { ok: res.ok, data }
   }
   return await submit()
@@ -454,43 +392,35 @@ async function adminFetch(endpoint: string, method: string, body: any) {
   setLoading('#admin-menu .admin-save-btn', true, 'Saving...')
   const res = await adminFetch('/api/meta', 'POST', { name })
   setLoading('#admin-menu .admin-save-btn', false)
-  if (res.ok) {
-    currentServer.name = name
-    const serverIdx = SERVERS.findIndex(s => s.id === currentServer.id); if (serverIdx !== -1) SERVERS[serverIdx].name = name
-    renderAll(); document.getElementById('admin-menu')!.style.display = 'none'
-  }
+  if (res.ok) { currentServer.name = name; const serverIdx = SERVERS.findIndex(s => s.id === currentServer.id); if (serverIdx !== -1) SERVERS[serverIdx].name = name; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' }
 };
 
-(window as any).addCategory = async () => {
-  const name = prompt('Category Name:'); if (name && (await adminFetch('/api/categories', 'POST', { name })).ok) { location.reload() }
-};
-
-(window as any).deleteCategory = async (id: string) => {
-  if (confirm('Delete category?') && (await adminFetch(`/api/categories/${id}`, 'DELETE', {})).ok) { location.reload() }
-};
-
-(window as any).promptAddChannel = async (catId: string | null = null) => {
-  const name = prompt('Channel Name:'); if (name && (await adminFetch('/api/channels', 'POST', { name, category_id: catId })).ok) { location.reload() }
-};
-
-(window as any).deleteChannel = async (id: string) => {
-  if (confirm('Delete channel?') && (await adminFetch(`/api/channels/${id}`, 'DELETE', {})).ok) { location.reload() }
-};
+(window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await adminFetch('/api/categories', 'POST', { name })).ok) location.reload() };
+(window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await adminFetch(`/api/categories/${id}`, 'DELETE', {})).ok) location.reload() };
+(window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await adminFetch('/api/channels', 'POST', { name, category_id: catId })).ok) location.reload() };
+(window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await adminFetch(`/api/channels/${id}`, 'DELETE', {})).ok) location.reload() };
 
 (window as any).submitMessage = async () => {
   const session = (window as any).atprotoSession; if (!session || !currentChannel) return
   const input = document.getElementById('message-input') as HTMLInputElement; const content = input.value.trim(); if (!content) return
-  setLoading('#input-area', true); input.value = ''; const tokens = await session.getTokenSet(); const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
+  
+  // OPTIMISTIC UI
+  const tempId = 'opt-' + Math.random().toString(36).substr(2, 9)
+  const optMsg = { id: tempId, did: currentUserDid, handle: currentUserHandle, content, channel_id: currentChannel.id, created_at: new Date().toISOString(), optimistic: true }
+  currentMessages.unshift(optMsg); renderMessages()
+  
+  input.value = ''; const tokens = await session.getTokenSet(); const pdsUrl = String(tokens.aud).replace(/\/+$/, '')
   const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
-    const res = await fetch(`${currentServer.url}/api/submit-message`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, content, channelId: currentChannel.id })
-    })
+    const res = await fetch(`${currentServer.url}/api/submit-message`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, content, channelId: currentChannel.id }) })
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce)
-    setLoading('#input-area', false)
-    // No explicit refresh needed if WS is working, but it will happen via the notifier
+    // Authoritative message will come via WebSocket or we could replace it here if no WS
+    if (!res.ok) {
+      log('Submission failed, removing optimistic message')
+      currentMessages = currentMessages.filter(m => m.id !== tempId)
+      renderMessages(); alert('Failed to send message.')
+    }
   }
   await submit()
 }

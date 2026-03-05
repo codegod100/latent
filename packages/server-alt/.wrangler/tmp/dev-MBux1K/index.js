@@ -899,6 +899,8 @@ function ulid(seedTime, prng) {
 __name(ulid, "ulid");
 
 // ../shared/core.ts
+var identityCache = /* @__PURE__ */ new Map();
+var CACHE_TTL = 5 * 60 * 1e3;
 async function handleRequest(request, storage, configSeed2, notifier) {
   const url = new URL(request.url);
   const headers = new Headers({
@@ -928,11 +930,20 @@ async function handleRequest(request, storage, configSeed2, notifier) {
     }
     const verifyIdentity = /* @__PURE__ */ __name(async (body) => {
       const { accessToken, dpopProof, pdsUrl, did } = body;
+      const cacheKey = `${did}:${accessToken}`;
+      const cached = identityCache.get(cacheKey);
+      if (cached && cached.expires > Date.now()) {
+        return cached.profile;
+      }
       const probeUrl = `${String(pdsUrl).replace(/\/+$/, "")}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
       const pdsRes = await fetch(probeUrl, { headers: { "Authorization": `DPoP ${accessToken}`, "DPoP": dpopProof } });
       const dpopNonce = pdsRes.headers.get("dpop-nonce");
-      if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: "Identity verification failed" };
-      return await pdsRes.json();
+      if (!pdsRes.ok) {
+        throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: "Identity verification failed" };
+      }
+      const profile = await pdsRes.json();
+      identityCache.set(cacheKey, { profile, expires: Date.now() + CACHE_TTL });
+      return profile;
     }, "verifyIdentity");
     const verifyAdmin = /* @__PURE__ */ __name(async (body) => {
       const profile = await verifyIdentity(body);
@@ -949,7 +960,6 @@ async function handleRequest(request, storage, configSeed2, notifier) {
           <style>
             body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
             h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
-            strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
           </style>
@@ -960,32 +970,24 @@ async function handleRequest(request, storage, configSeed2, notifier) {
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (WebSocket Enabled)</strong></p>
+          <p>Status: <strong>Active (Optimized Logic)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
     }
     if (url.pathname === "/api/ws") {
-      if (request.headers.get("Upgrade") !== "websocket") {
-        return new Response("Expected WebSocket upgrade", { status: 400 });
-      }
-      if (!notifier) {
-        return new Response("WebSockets not supported on this node", { status: 501 });
-      }
+      if (request.headers.get("Upgrade") !== "websocket") return new Response("Expected WebSocket upgrade", { status: 400 });
+      if (!notifier) return new Response("WebSockets not supported on this node", { status: 501 });
       return new Response(null, { status: 101, headers: { "Upgrade": "websocket", "Connection": "Upgrade" } });
     }
     if (url.pathname === "/api/meta") {
       if (request.method === "GET") {
         const categories = await storage.listCategories();
         const chanList = await storage.listChannels();
-        return new Response(JSON.stringify({
-          id: serverId,
-          name: serverName,
-          adminHandle,
-          categories,
-          channels: chanList,
-          features: { ws: !!notifier }
-        }), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
+        return new Response(
+          JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList, features: { ws: !!notifier } }),
+          { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } }
+        );
       }
       if (request.method === "POST") {
         const body = await request.json();

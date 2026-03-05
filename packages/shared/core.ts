@@ -5,6 +5,10 @@ export interface Notifier {
   broadcast(channelId: string | null, message: any): Promise<void>;
 }
 
+// In-memory cache for verified identities to speed up repeated requests
+const identityCache = new Map<string, { profile: any, expires: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 export async function handleRequest(
   request: Request, 
   storage: Storage, 
@@ -21,10 +25,8 @@ export async function handleRequest(
   if (request.method === 'OPTIONS') return new Response(null, { headers });
 
   try {
-    // 0. BOOTSTRAP
     await storage.ensureTables();
 
-    // 1. SYNC CONFIG
     const serverId = (await storage.getConfig('server_id')) || (await (async () => {
       const id = ulid();
       await storage.setConfig('server_id', id);
@@ -39,20 +41,35 @@ export async function handleRequest(
       return configSeed.adminHandle;
     })());
 
-    // 2. ENSURE DEFAULT CHANNEL
     const channels = await storage.listChannels();
     if (channels.length === 0) {
       await storage.addChannel(ulid(), null, 'general', 'General discussion', 0);
     }
 
-    // 3. HELPERS
+    // --- OPTIMIZED IDENTITY VERIFIER ---
     const verifyIdentity = async (body: any) => {
       const { accessToken, dpopProof, pdsUrl, did } = body;
+      
+      // Check Cache First
+      const cacheKey = `${did}:${accessToken}`;
+      const cached = identityCache.get(cacheKey);
+      if (cached && cached.expires > Date.now()) {
+        return cached.profile;
+      }
+
       const probeUrl = `${String(pdsUrl).replace(/\/+$/, '')}/xrpc/app.bsky.actor.getProfile?actor=${did}`;
       const pdsRes = await fetch(probeUrl, { headers: { 'Authorization': `DPoP ${accessToken}`, 'DPoP': dpopProof } });
       const dpopNonce = pdsRes.headers.get('dpop-nonce');
-      if (!pdsRes.ok) throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: 'Identity verification failed' };
-      return await pdsRes.json() as any;
+      
+      if (!pdsRes.ok) {
+        throw { status: pdsRes.status, isChallenge: pdsRes.status === 401 && !!dpopNonce, dpopNonce, error: 'Identity verification failed' };
+      }
+      
+      const profile = await pdsRes.json() as any;
+      
+      // Store in Cache
+      identityCache.set(cacheKey, { profile, expires: Date.now() + CACHE_TTL });
+      return profile;
     };
 
     const verifyAdmin = async (body: any) => {
@@ -61,7 +78,6 @@ export async function handleRequest(
       return profile;
     };
 
-    // 4. ROUTING
     if (url.pathname === '/') {
       return new Response(`
         <!doctype html>
@@ -72,7 +88,6 @@ export async function handleRequest(
           <style>
             body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
             h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
-            strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
           </style>
@@ -83,36 +98,24 @@ export async function handleRequest(
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (WebSocket Enabled)</strong></p>
+          <p>Status: <strong>Active (Optimized Logic)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
     }
 
-    // --- WEBSOCKET HANDSHAKE ---
     if (url.pathname === '/api/ws') {
-      if (request.headers.get('Upgrade') !== 'websocket') {
-        return new Response('Expected WebSocket upgrade', { status: 400 });
-      }
-      if (!notifier) {
-        return new Response('WebSockets not supported on this node', { status: 501 });
-      }
+      if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket upgrade', { status: 400 });
+      if (!notifier) return new Response('WebSockets not supported on this node', { status: 501 });
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
     }
 
-    // --- API: META ---
     if (url.pathname === '/api/meta') {
       if (request.method === 'GET') {
         const categories = await storage.listCategories();
         const chanList = await storage.listChannels();
-        return new Response(JSON.stringify({ 
-          id: serverId, 
-          name: serverName, 
-          adminHandle, 
-          categories, 
-          channels: chanList,
-          features: { ws: !!notifier }
-        }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+        return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, categories, channels: chanList, features: { ws: !!notifier } }), 
+          { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
       }
       if (request.method === 'POST') {
         const body = await request.json() as any;
@@ -122,7 +125,6 @@ export async function handleRequest(
       }
     }
 
-    // --- API: CATEGORIES ---
     if (url.pathname === '/api/categories' && request.method === 'POST') {
       const body = await request.json() as any;
       await verifyAdmin(body);
@@ -138,7 +140,6 @@ export async function handleRequest(
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
-    // --- API: CHANNELS ---
     if (url.pathname === '/api/channels' && request.method === 'POST') {
       const body = await request.json() as any;
       await verifyAdmin(body);
@@ -154,7 +155,6 @@ export async function handleRequest(
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
-    // --- API: MESSAGES ---
     if (url.pathname === '/api/messages' && request.method === 'GET') {
       const channelId = url.searchParams.get('channelId');
       const messages = await storage.listMessages(channelId);
@@ -167,9 +167,8 @@ export async function handleRequest(
       const { did, content, channelId } = body;
       const msgId = ulid();
       const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, created_at: new Date().toISOString() };
-      await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
       
-      // CRITICAL: Await the broadcast
+      await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
       if (notifier) await notifier.broadcast(msg.channel_id, { type: 'new_message', message: msg });
       
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
@@ -182,10 +181,7 @@ export async function handleRequest(
       const success = await storage.updateMessage(id, did, content);
       if (!success) throw { status: 403, error: 'Unauthorized or message not found' };
       const msg = await storage.getMessage(id);
-      
-      // CRITICAL: Await the broadcast
       if (notifier && msg) await notifier.broadcast(msg.channel_id, { type: 'edit_message', message: msg });
-      
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
