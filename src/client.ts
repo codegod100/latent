@@ -171,15 +171,28 @@ function renderMessages(shouldScrollBottom = true) {
   
   container.innerHTML = (hasMoreMessages ? '<div id="load-more-indicator" style="text-align:center; padding:10px; color:var(--subtext0); font-size:12px;">Scroll up to load more</div>' : '') + 
     currentMessages.slice().reverse().map((m: any) => {
-    const reactionCounts = (m.reactions || []).reduce((acc: any, r: any) => { acc[r.emoji] = (acc[r.emoji] || 0) + 1; return acc }, {});
+    // Group reactions by emoji and collect handles
+    const reactionsByEmoji = (m.reactions || []).reduce((acc: any, r: any) => {
+      if (!acc[r.emoji]) acc[r.emoji] = [];
+      acc[r.emoji].push(r.handle);
+      return acc;
+    }, {});
+
     const myReactions = (m.reactions || []).filter((r: any) => r.did === currentUserDid).map((r: any) => r.emoji);
-    const reactionHtml = Object.entries(reactionCounts).map(([emoji, count]) => `<div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" onclick="window.toggleReaction('${m.id}', '${emoji}')"><span>${emoji}</span><span class="reaction-count">${count}</span></div>`).join('');
+    const reactionHtml = Object.entries(reactionsByEmoji).map(([emoji, handles]: [string, any]) => `
+      <div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" 
+           onclick="window.toggleReaction('${m.id}', '${emoji}')"
+           title="${handles.join(', ')}">
+        <span>${emoji}</span><span class="reaction-count">${handles.length}</span>
+      </div>
+    `).join('');
+
     const parentMsg = m.parent; 
 
     return `
       <div class="msg-item" id="msg-${m.id}">
         ${parentMsg ? `<div class="msg-reply-to" onclick="document.getElementById('msg-${parentMsg.id}')?.scrollIntoView({behavior:'smooth'})">
-          <span style="opacity:0.6">┌ @${parentMsg.handle}:</span> ${parentMsg.content.substring(0, 60)}${parentMsg.content.length > 60 ? '...' : ''}
+          <span style="opacity:0.6">@${parentMsg.handle}:</span> ${parentMsg.content.substring(0, 60)}${parentMsg.content.length > 60 ? '...' : ''}
         </div>` : ''}
         <div class="msg-actions">
           <div class="action-btn" onclick="window.replyTo('${m.id}')" title="Reply">↩</div>
