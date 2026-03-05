@@ -186,9 +186,14 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; }
-  document.getElementById('search-results')!.style.display = 'none'
-  document.getElementById('clear-search')!.style.display = 'none'
+  if (input) { 
+    input.value = ''; 
+    input.focus(); 
+  }
+  const resultsEl = document.getElementById('search-results');
+  const clearBtn = document.getElementById('clear-search');
+  if (resultsEl) resultsEl.style.display = 'none';
+  if (clearBtn) clearBtn.style.display = 'none';
 };
 
 (window as any).jumpToMessage = async (id: string, serverHost?: string, channelId?: string) => {
@@ -231,12 +236,10 @@ function renderMessages(shouldScrollBottom = true) {
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
   
   resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
-  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
+  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching...</div>'
   
   try {
     const healthyServers = SERVERS.filter(s => !s.error);
-    if (healthyServers.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No active servers.</div>'; return }
-
     const searchTasks = healthyServers.map(async (server) => {
       try {
         const res = await fetch(`${server.url}/api/search?q=${encodeURIComponent(query)}`)
@@ -253,7 +256,7 @@ function renderMessages(shouldScrollBottom = true) {
     resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => {
       const channel = server.channels.find((c: any) => c.id === group.channelId)
       return `
-        <div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}')">
+        <div class="search-result-group" onclick="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}')">
           <div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>
           ${group.messages.map((m: any) => `
             <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
@@ -433,7 +436,7 @@ if (sInput) {
     setTimeout(() => {
       document.getElementById('search-results')!.style.display = 'none'
       document.getElementById('clear-search')!.style.display = 'none'
-    }, 200);
+    }, 300);
   };
 }
 
