@@ -286,7 +286,7 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
     const s = serverSessions.get(server.url); if (s && new Date(s.expires) > new Date()) headers['Authorization'] = `Bearer ${s.token}`;
     const fetchOpts: any = { method, headers };
     if (method !== 'GET' && method !== 'HEAD') {
-      fetchOpts.body = JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did });
+      fetchOpts.body = JSON.stringify({ ...body, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, requesterDid: session.did });
     }
     const res = await fetch(`${server.url}${endpoint}`, fetchOpts);
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce);
@@ -306,7 +306,11 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
   const parentId = replyToMessage?.id || null; setLoading('#input-area', true); input.value = ''; (window as any).cancelReply();
   const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, parentId });
   setLoading('#input-area', false); 
-  if (res?.status === 403) alert('You are banned from this server.');
+  if (res?.status === 403) {
+    if (res.data?.inviteOnly) alert('This server is invite-only. You need to use an invite link to join.');
+    else if (res.data?.banned) alert(`Access Denied: ${res.data.error}`);
+    else alert('Permission denied.');
+  }
   else if (res?.ok && !currentServer.features?.ws) refreshMessages(); 
   else if (!res?.ok) alert('Failed to send.');
 };

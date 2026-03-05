@@ -55,7 +55,8 @@ export async function handleRequest(
         if (session) result = { did: session.did, handle: session.handle };
       }
       if (!result) {
-        const { accessToken, dpopProof, pdsUrl, did } = body;
+        const { accessToken, dpopProof, pdsUrl, requesterDid } = body;
+        const did = requesterDid || body.did; // Fallback to did if requesterDid not provided
         if (!accessToken) throw { status: 401, error: 'Authentication required' };
         const cacheKey = `${did}:${accessToken}`;
         const cached = identityCache.get(cacheKey);
@@ -72,9 +73,9 @@ export async function handleRequest(
         }
       }
       if (result) {
-        if (await storage.isBanned(result.did)) throw { status: 403, error: 'User is banned from this server' };
+        if (await storage.isBanned(result.did)) throw { status: 403, error: `You are banned from this server (${result.did})`, banned: true };
         if (!skipMemberCheck && inviteOnly && result.handle !== adminHandle) {
-          if (!(await storage.isMember(result.did))) throw { status: 403, error: 'This server is invite-only', inviteOnly: true };
+          if (!(await storage.isMember(result.did))) throw { status: 403, error: `Membership required (${result.did})`, inviteOnly: true };
         }
         return result;
       }
