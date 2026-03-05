@@ -1,7 +1,16 @@
 import { ulid } from 'ulid';
 import { Storage } from './storage';
 
-export async function handleRequest(request: Request, storage: Storage, configSeed: { adminHandle: string, defaultName: string }): Promise<Response> {
+export interface Notifier {
+  broadcast(channelId: string | null, message: any): void;
+}
+
+export async function handleRequest(
+  request: Request, 
+  storage: Storage, 
+  configSeed: { adminHandle: string, defaultName: string },
+  notifier?: Notifier
+): Promise<Response> {
   const url = new URL(request.url);
   const headers = new Headers({
     'Access-Control-Allow-Origin': '*', 
@@ -12,10 +21,10 @@ export async function handleRequest(request: Request, storage: Storage, configSe
   if (request.method === 'OPTIONS') return new Response(null, { headers });
 
   try {
-    // 0. BOOTSTRAP (Create tables if missing)
+    // 0. BOOTSTRAP
     await storage.ensureTables();
 
-    // 1. SYNC CONFIG (Now inside try block)
+    // 1. SYNC CONFIG
     const serverId = (await storage.getConfig('server_id')) || (await (async () => {
       const id = ulid();
       await storage.setConfig('server_id', id);
@@ -53,7 +62,6 @@ export async function handleRequest(request: Request, storage: Storage, configSe
     };
 
     // 4. ROUTING
-    // --- LANDING PAGE ---
     if (url.pathname === '/') {
       return new Response(`
         <!doctype html>
@@ -64,7 +72,6 @@ export async function handleRequest(request: Request, storage: Storage, configSe
           <style>
             body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
             h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
-            strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
           </style>
@@ -75,10 +82,19 @@ export async function handleRequest(request: Request, storage: Storage, configSe
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (latent-core)</strong></p>
+          <p>Status: <strong>Active (WebSocket Enabled)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
+    }
+
+    // --- WEBSOCKET HANDSHAKE ---
+    if (url.pathname === '/api/ws') {
+      if (request.headers.get('Upgrade') !== 'websocket') {
+        return new Response('Expected WebSocket upgrade', { status: 400 });
+      }
+      // Handled by platform-specific shim if it supports it
+      return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
     }
 
     // --- API: META ---
@@ -141,7 +157,13 @@ export async function handleRequest(request: Request, storage: Storage, configSe
       const profile = await verifyIdentity(body);
       const { did, content, channelId } = body;
       const msgId = ulid();
-      await storage.addMessage(msgId, did, profile.handle, content, channelId || null);
+      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, created_at: new Date().toISOString() };
+      
+      await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
+      
+      // BROADCAST
+      if (notifier) notifier.broadcast(msg.channel_id, { type: 'new_message', message: msg });
+      
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
 
@@ -151,6 +173,10 @@ export async function handleRequest(request: Request, storage: Storage, configSe
       const { id, content, did } = body;
       const success = await storage.updateMessage(id, did, content);
       if (!success) throw { status: 403, error: 'Unauthorized or message not found' };
+      
+      const msg = await storage.getMessage(id);
+      if (notifier && msg) notifier.broadcast(msg.channel_id, { type: 'edit_message', message: msg });
+      
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 

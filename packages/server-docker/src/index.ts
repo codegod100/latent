@@ -3,33 +3,65 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Database } from 'bun:sqlite';
 import { SQLiteStorage } from './shared/storage';
-import { handleRequest } from './shared/core';
+import { handleRequest, Notifier } from './shared/core';
 
 // 1. LOAD CONFIG
 const configPath = path.resolve('server-config.toml');
 const tomlString = fs.readFileSync(configPath, 'utf8');
 const configSeed = parse(tomlString) as { adminHandle: string, defaultName: string };
 
-// 2. STORAGE (CRITICAL: Use persistent volume path in production)
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.FLY_APP_NAME;
 const dbDir = IS_PROD ? '/app/data' : path.resolve('.');
 const dbPath = path.join(dbDir, 'data.db');
 
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
 const db = new Database(dbPath, { create: true });
 const storage = new SQLiteStorage(db);
 
 const PORT = 8789;
 
-// 3. BUN NATIVE SERVER
-export default {
-  port: PORT,
-  async fetch(request: Request) {
-    return handleRequest(request, storage, configSeed);
+// 2. REAL-TIME NOTIFIER (Bun implementation)
+let bunServer: any;
+const notifier: Notifier = {
+  broadcast(channelId, data) {
+    if (bunServer) {
+      const topic = channelId || 'global';
+      bunServer.publish(topic, JSON.stringify(data));
+    }
   }
-}
+};
+
+// 3. BUN SERVER
+bunServer = Bun.serve({
+  port: PORT,
+  async fetch(request, server) {
+    const url = new URL(request.url);
+    
+    // Handle WS Upgrade
+    if (url.pathname === '/api/ws') {
+      const channelId = url.searchParams.get('channelId') || 'global';
+      if (server.upgrade(request, { data: { channelId } })) {
+        return; // Handled
+      }
+    }
+
+    return handleRequest(request, storage, configSeed, notifier);
+  },
+  websocket: {
+    open(ws) {
+      const { channelId } = ws.data as any;
+      ws.subscribe(channelId);
+      console.log(`Socket opened for ${channelId}`);
+    },
+    message(ws, message) {
+      // We don't expect messages from client for now
+    },
+    close(ws) {
+      const { channelId } = ws.data as any;
+      ws.unsubscribe(channelId);
+    }
+  }
+});
 
 console.log(`Docker server running at http://0.0.0.0:${PORT} (DB: ${dbPath})`);

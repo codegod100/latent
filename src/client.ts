@@ -16,6 +16,8 @@ let currentServer: any = null
 let currentChannel: any = null
 let currentUserHandle: string | null = null
 let currentUserDid: string | null = null
+let currentMessages: any[] = []
+let ws: WebSocket | null = null
 
 const CLIENT_URL = IS_LOCAL ? `http://${HOSTNAME}:3010` : window.location.origin
 const CLIENT_ID = IS_LOCAL 
@@ -24,12 +26,7 @@ const CLIENT_ID = IS_LOCAL
 
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
-  clientMetadata: {
-    client_id: CLIENT_ID,
-    redirect_uris: [CLIENT_URL + '/'],
-    scope: 'atproto transition:generic',
-    token_endpoint_auth_method: 'none',
-  }
+  clientMetadata: { client_id: CLIENT_ID, redirect_uris: [CLIENT_URL + '/'], scope: 'atproto transition:generic', token_endpoint_auth_method: 'none' }
 })
 
 const log = (m: string, obj?: any) => {
@@ -49,19 +46,10 @@ function setLoading(selector: string, isLoading: boolean, text: string | null = 
   if (!el) return
   if (isLoading) {
     el.classList.add('loading-overlay')
-    if (el instanceof HTMLButtonElement) {
-      el.disabled = true
-      if (text) {
-        (el as any)._oldText = el.innerHTML
-        el.innerHTML = `<span class="inline-spinner"></span>${text}`
-      }
-    }
+    if (el instanceof HTMLButtonElement) { el.disabled = true; if (text) { (el as any)._oldText = el.innerHTML; el.innerHTML = `<span class="inline-spinner"></span>${text}` } }
   } else {
     el.classList.remove('loading-overlay')
-    if (el instanceof HTMLButtonElement) {
-      el.disabled = false
-      if ((el as any)._oldText) el.innerHTML = (el as any)._oldText
-    }
+    if (el instanceof HTMLButtonElement) { el.disabled = false; if ((el as any)._oldText) el.innerHTML = (el as any)._oldText }
   }
 }
 
@@ -72,6 +60,44 @@ async function fetchWithTimeout(resource: string, options: any = {}) {
   const response = await fetch(resource, { ...options, signal: controller.signal });
   clearTimeout(id);
   return response;
+}
+
+// --- REAL-TIME (WebSocket) ---
+function setupWebSocket() {
+  if (ws) { ws.close(); ws = null; }
+  if (!currentServer || !currentChannel || currentServer.error) return;
+
+  const protocol = currentServer.url.startsWith('https') ? 'wss' : 'ws';
+  const wsUrl = `${currentServer.url.replace(/^https?/, protocol)}/api/ws?channelId=${currentChannel.id}`;
+  
+  log(`Connecting to WebSocket: ${wsUrl}`);
+  ws = new WebSocket(wsUrl);
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'new_message') {
+        // Only add if not already in list
+        if (!currentMessages.some(m => m.id === data.message.id)) {
+          currentMessages.unshift(data.message);
+          renderMessages();
+        }
+      } else if (data.type === 'edit_message') {
+        const idx = currentMessages.findIndex(m => m.id === data.message.id);
+        if (idx !== -1) {
+          currentMessages[idx] = data.message;
+          renderMessages();
+        }
+      }
+    } catch (e) { log('WS Message error', e) }
+  };
+
+  ws.onclose = () => {
+    log('WebSocket closed. Reconnecting in 3s...');
+    setTimeout(setupWebSocket, 3000);
+  };
+
+  ws.onerror = (e) => { log('WebSocket error', e); };
 }
 
 // --- CRYPTO HELPER ---
@@ -94,10 +120,7 @@ async function pdsFetch(session: any, url: string, init: RequestInit = {}) {
   const tokens = await session.getTokenSet()
   const perform = async (nonce: string | null = null): Promise<Response> => {
     const proof = await getDpopProof(session, init.method || 'GET', url, nonce)
-    const res = await fetch(url, {
-      ...init,
-      headers: { ...init.headers, 'Authorization': `DPoP ${tokens.access_token}`, 'DPoP': proof }
-    })
+    const res = await fetch(url, { ...init, headers: { ...init.headers, 'Authorization': `DPoP ${tokens.access_token}`, 'DPoP': proof } })
     if (res.status === 401) {
       const newNonce = res.headers.get('dpop-nonce')
       if (newNonce && nonce !== newNonce) return perform(newNonce)
@@ -247,20 +270,26 @@ async function refreshMessages() {
   container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Loading...</div></div>`
   try {
     const res = await fetchWithTimeout(`${currentServer.url}/api/messages?channelId=${currentChannel.id}`, { timeout: 5000 })
-    const messages = await res.json()
-    container.innerHTML = messages.length === 0 ? '<div style="padding:1rem; color:#949ba4;"><em>No messages.</em></div>' :
-      messages.map((m: any) => `
-        <div class="msg-item" id="msg-${m.id}">
-          <div class="msg-header">
-            <span class="msg-author">@${m.handle}</span>
-            <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
-            ${m.did === currentUserDid ? `<span class="edit-link" onclick="window.enterEditMode('${m.id}')">edit</span>` : ''}
-          </div>
-          <div class="msg-content" id="msg-content-${m.id}">${linkify(m.content)}</div>
-        </div>
-      `).reverse().join('')
-    container.scrollTop = container.scrollHeight
+    currentMessages = await res.json()
+    renderMessages()
+    setupWebSocket()
   } catch (e) { container.innerHTML = '<div style="padding:1rem; color:#f23f42;">Offline</div>' }
+}
+
+function renderMessages() {
+  const container = document.getElementById('message-list')!
+  container.innerHTML = currentMessages.length === 0 ? '<div style="padding:1rem; color:#949ba4;"><em>No messages.</em></div>' :
+    currentMessages.map((m: any) => `
+      <div class="msg-item" id="msg-${m.id}">
+        <div class="msg-header">
+          <span class="msg-author">@${m.handle}</span>
+          <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
+          ${m.did === currentUserDid ? `<span class="edit-link" onclick="window.enterEditMode('${m.id}')">edit</span>` : ''}
+        </div>
+        <div class="msg-content" id="msg-content-${m.id}">${linkify(m.content)}</div>
+      </div>
+    `).reverse().join('')
+  container.scrollTop = container.scrollHeight
 }
 
 // --- MOBILE HELPERS ---
@@ -277,7 +306,7 @@ async function refreshMessages() {
     currentChannel = server.channels?.[0] || null
     window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`)
     renderAll()
-    if (window.innerWidth <= 768) (window as any).toggleMenu(true) // Stay in menu to select channel
+    if (window.innerWidth <= 768) (window as any).toggleMenu(true)
   }
 };
 
@@ -287,11 +316,11 @@ async function refreshMessages() {
     currentChannel = chan
     window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`)
     renderAll()
-    if (window.innerWidth <= 768) (window as any).toggleMenu(false) // Close menu to show chat
+    if (window.innerWidth <= 768) (window as any).toggleMenu(false)
   }
 };
 
-// --- REST OF ACTIONS ---
+// --- ACTIONS ---
 (window as any).enterEditMode = (id: string) => {
   const contentEl = document.getElementById(`msg-content-${id}`)!
   const original = contentEl.textContent!
@@ -313,14 +342,16 @@ async function refreshMessages() {
   const submit = async (nonce: string | null = null) => {
     const dpop = await getDpopProof(session, 'GET', probeUrl, nonce)
     const res = await fetch(`${currentServer.url}/api/edit-message`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id, content, accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did })
     })
     const data = await res.json()
     if (data.isChallenge) return submit(data.dpopNonce)
     setLoading(`#edit-save-${id}`, false)
-    if (res.ok) refreshMessages()
+    if (res.ok) {
+      // Logic handled via WebSocket broadcast if online, but let's refresh locally just in case
+      refreshMessages()
+    }
   }
   await submit()
 };
@@ -425,29 +456,19 @@ async function adminFetch(endpoint: string, method: string, body: any) {
 };
 
 (window as any).addCategory = async () => {
-  const name = prompt('Category Name:'); if (name && (await adminFetch('/api/categories', 'POST', { name })).ok) {
-    currentServer.categories.push({ id: ulid(), name }); renderChannelList()
-  }
+  const name = prompt('Category Name:'); if (name && (await adminFetch('/api/categories', 'POST', { name })).ok) { location.reload() }
 };
 
 (window as any).deleteCategory = async (id: string) => {
-  if (confirm('Delete category?') && (await adminFetch(`/api/categories/${id}`, 'DELETE', {})).ok) {
-    currentServer.categories = currentServer.categories.filter((c: any) => c.id !== id); renderChannelList()
-  }
+  if (confirm('Delete category?') && (await adminFetch(`/api/categories/${id}`, 'DELETE', {})).ok) { location.reload() }
 };
 
 (window as any).promptAddChannel = async (catId: string | null = null) => {
-  const name = prompt('Channel Name:'); if (name && (await adminFetch('/api/channels', 'POST', { name, category_id: catId })).ok) {
-    currentServer.channels.push({ id: ulid(), name, category_id: catId }); renderChannelList()
-  }
+  const name = prompt('Channel Name:'); if (name && (await adminFetch('/api/channels', 'POST', { name, category_id: catId })).ok) { location.reload() }
 };
 
 (window as any).deleteChannel = async (id: string) => {
-  if (confirm('Delete channel?') && (await adminFetch(`/api/channels/${id}`, 'DELETE', {})).ok) {
-    currentServer.channels = currentServer.channels.filter((c: any) => c.id !== id)
-    if (currentChannel?.id === id) currentChannel = currentServer.channels[0] || null
-    renderAll()
-  }
+  if (confirm('Delete channel?') && (await adminFetch(`/api/channels/${id}`, 'DELETE', {})).ok) { location.reload() }
 };
 
 (window as any).submitMessage = async () => {
@@ -462,7 +483,8 @@ async function adminFetch(endpoint: string, method: string, body: any) {
       body: JSON.stringify({ accessToken: tokens.access_token, dpopProof: dpop, pdsUrl, did: session.did, content, channelId: currentChannel.id })
     })
     const data = await res.json(); if (data.isChallenge) return submit(data.dpopNonce)
-    setLoading('#input-area', false); if (res.ok) refreshMessages()
+    setLoading('#input-area', false)
+    // No explicit refresh needed if WS is working, but it will happen via the notifier
   }
   await submit()
 }

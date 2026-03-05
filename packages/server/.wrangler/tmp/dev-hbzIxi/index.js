@@ -899,7 +899,7 @@ function ulid(seedTime, prng) {
 __name(ulid, "ulid");
 
 // ../shared/core.ts
-async function handleRequest(request, storage, configSeed2) {
+async function handleRequest(request, storage, configSeed2, notifier) {
   const url = new URL(request.url);
   const headers = new Headers({
     "Access-Control-Allow-Origin": "*",
@@ -949,7 +949,6 @@ async function handleRequest(request, storage, configSeed2) {
           <style>
             body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; background: #1e1e2e; color: #cdd6f4; }
             h1 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 0.5rem; }
-            strong { color: #f5e0dc; }
             .info-box { background: #313244; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #b4befe; margin: 1.5rem 0; }
             code { background: #181825; padding: 0.2rem 0.4rem; border-radius: 4px; color: #a6e3a1; font-family: monospace; }
           </style>
@@ -960,10 +959,16 @@ async function handleRequest(request, storage, configSeed2) {
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (latent-core)</strong></p>
+          <p>Status: <strong>Active (WebSocket Enabled)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
+    }
+    if (url.pathname === "/api/ws") {
+      if (request.headers.get("Upgrade") !== "websocket") {
+        return new Response("Expected WebSocket upgrade", { status: 400 });
+      }
+      return new Response(null, { status: 101, headers: { "Upgrade": "websocket", "Connection": "Upgrade" } });
     }
     if (url.pathname === "/api/meta") {
       if (request.method === "GET") {
@@ -1019,7 +1024,9 @@ async function handleRequest(request, storage, configSeed2) {
       const profile = await verifyIdentity(body);
       const { did, content, channelId } = body;
       const msgId = ulid();
-      await storage.addMessage(msgId, did, profile.handle, content, channelId || null);
+      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, created_at: (/* @__PURE__ */ new Date()).toISOString() };
+      await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
+      if (notifier) notifier.broadcast(msg.channel_id, { type: "new_message", message: msg });
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
     if (url.pathname === "/api/edit-message" && request.method === "POST") {
@@ -1028,6 +1035,8 @@ async function handleRequest(request, storage, configSeed2) {
       const { id, content, did } = body;
       const success = await storage.updateMessage(id, did, content);
       if (!success) throw { status: 403, error: "Unauthorized or message not found" };
+      const msg = await storage.getMessage(id);
+      if (notifier && msg) notifier.broadcast(msg.channel_id, { type: "edit_message", message: msg });
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
     return new Response("Not Found", { status: 404, headers });
