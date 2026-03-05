@@ -47,11 +47,13 @@ const loadMsg = (msg: string) => {
 function isAdmin() {
   return currentUserHandle && currentServer?.adminHandle === currentUserHandle;
 }
+(window as any).isAdmin = isAdmin;
 
 function renderAdminUI() {
   const btn = document.getElementById('admin-tools');
   if (btn) btn.style.display = isAdmin() ? 'block' : 'none';
 }
+(window as any).renderAdminUI = renderAdminUI;
 
 function setLoading(selector: string, isLoading: boolean, text: string | null = null) {
   const el = document.querySelector(selector) as HTMLElement
@@ -162,6 +164,7 @@ async function pdsFetch(session: any, url: string, init: RequestInit = {}) {
   return perform()
 }
 
+// This function exchanges ATProto credentials for a short-lived server session token
 async function authenticateWithServer(server: any) {
   const session = (window as any).atprotoSession; if (!session) return;
   const tokens = await session.getTokenSet();
@@ -457,10 +460,6 @@ async function showApp(session: any) {
 };
 (window as any).logout = () => { localStorage.clear(); location.href = '/' };
 (window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
-(window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
-(window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await serverMutation(currentServer, `/api/categories/${id}`, { method: 'DELETE' })).ok) location.reload() };
-(window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
-(window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
 
 const inputEl = document.getElementById('message-input');
 if (inputEl) { inputEl.onkeydown = (e) => { if (e.key === 'Enter') (window as any).submitMessage() }; }
