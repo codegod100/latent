@@ -258,13 +258,23 @@ async function hydrateServers() {
   if (targetHost && !SERVER_URLS.some(u => new URL(u).host === targetHost)) {
     try {
       const proto = targetHost.includes('127.0.0.1') ? 'http' : 'https'; const discoverUrl = `${proto}://${targetHost}`
-      const res = await fetchWithTimeout(`${discoverUrl}/api/meta`, { timeout: 3000 });
+      const res = await fetchWithTimeout(`${discoverUrl}/api/meta`, { timeout: 10000 });
       if (res.ok) { const meta = await res.json(); if (confirm(`Join "${meta.name}" (${targetHost})?`)) { SERVER_URLS.push(discoverUrl); if ((window as any).atprotoSession) await (window as any).saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)) } }
-    } catch (e) {}
+    } catch (e) { log(`Discovery failed for ${targetHost}`, e) }
   }
   SERVERS = await Promise.all(SERVER_URLS.map(async (url) => {
-    try { const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 3000 }); const meta = await res.json(); const host = new URL(url).host; return { ...meta, url, host, id: meta.id || host } }
-    catch (e) { const host = new URL(url).host; return { id: host, name: 'Offline Server', url, host, error: true, categories: [], channels: [] } }
+    try { 
+      const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 10000 }); 
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const meta = await res.json(); 
+      const host = new URL(url).host; 
+      return { ...meta, url, host, id: meta.id || host } 
+    }
+    catch (e) { 
+      const host = new URL(url).host; 
+      log(`Server ${host} is offline`, e);
+      return { id: host, name: 'Offline Server', url, host, error: true, categories: [], channels: [] } 
+    }
   }))
   if (targetHost) currentServer = SERVERS.find(s => s.host === targetHost)
   if (!currentServer) currentServer = SERVERS[0]

@@ -28,15 +28,15 @@ export async function handleRequest(
     await storage.ensureTables();
 
     // 1. SYNC CONFIG
-    const serverId = (await storage.getConfig('server_id')) || (await (async () => {
-      const id = ulid(); await storage.setConfig('server_id', id); return id;
-    })());
-    const serverName = (await storage.getConfig('server_name')) || (await (async () => {
-      await storage.setConfig('server_name', configSeed.defaultName); return configSeed.defaultName;
-    })());
-    const adminHandle = (await storage.getConfig('admin_handle')) || (await (async () => {
-      await storage.setConfig('admin_handle', configSeed.adminHandle); return configSeed.adminHandle;
-    })());
+    let serverId = await storage.getConfig('server_id');
+    if (!serverId) { serverId = ulid(); await storage.setConfig('server_id', serverId); }
+    
+    // Always sync name and admin handle from seed to allow easy configuration updates
+    await storage.setConfig('server_name', configSeed.defaultName);
+    const serverName = configSeed.defaultName;
+    
+    await storage.setConfig('admin_handle', configSeed.adminHandle);
+    const adminHandle = configSeed.adminHandle;
 
     // 2. ENSURE DEFAULT CHANNEL
     const channels = await storage.listChannels();
