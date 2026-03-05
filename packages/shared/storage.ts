@@ -73,7 +73,8 @@ export class D1Storage implements Storage {
     if (channelId) { sql += 'channel_id = ? AND '; params.push(channelId); }
     sql += 'content LIKE ? ORDER BY id DESC LIMIT ?';
     params.push(`%${query}%`, limit);
-    return (await this.db.prepare(sql).bind(...params).all()).results;
+    const res = await this.db.prepare(sql).bind(...params).all();
+    return res.results;
   }
 
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parent_id: string | null = null) {
@@ -145,8 +146,8 @@ export class SQLiteStorage implements Storage {
     return this.db.prepare(sql).all(...params);
   }
 
-  async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parent_id: string | null = null) {
-    this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channelId, parent_id);
+  async addMessage(id: string, did: string, handle: string, content: string, channel_id: string | null, parent_id: string | null = null) {
+    this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channel_id, parent_id);
   }
   async getMessage(id: string) { return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id); }
   async updateMessage(id: string, did: string, content: string) {

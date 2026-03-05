@@ -186,10 +186,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { 
-    input.value = ''; 
-    input.focus(); 
-  }
+  if (input) { input.value = ''; input.focus(); }
   const resultsEl = document.getElementById('search-results');
   const clearBtn = document.getElementById('clear-search');
   if (resultsEl) resultsEl.style.display = 'none';
@@ -197,13 +194,12 @@ function renderMessages(shouldScrollBottom = true) {
 };
 
 (window as any).jumpToMessage = async (id: string, serverHost?: string, channelId?: string) => {
-  // If server/channel specified and different, switch first
   if (serverHost && serverHost !== currentServer?.host) {
     const targetServer = SERVERS.find(s => s.host === serverHost); if (!targetServer) return
-    currentServer = targetServer; currentChannel = targetServer.channels.find((c: any) => c.id === channelId) || targetServer.channels[0]
+    currentServer = targetServer; currentChannel = (targetServer.channels || []).find((c: any) => c.id === channelId) || targetServer.channels?.[0]
     renderAll()
   } else if (channelId && channelId !== currentChannel?.id) {
-    currentChannel = currentServer.channels.find((c: any) => c.id === channelId) || currentServer.channels[0]
+    currentChannel = (currentServer.channels || []).find((c: any) => c.id === channelId) || currentServer.channels?.[0]
     renderAll()
   }
 
@@ -213,12 +209,10 @@ function renderMessages(shouldScrollBottom = true) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       el.classList.add('flash-highlight')
       setTimeout(() => el.classList.remove('flash-highlight'), 3000)
-      window.clearSearch(); // Clear box after jump
-      return true
+      window.clearSearch(); return true
     }
     return false
   }
-
   if (checkAndHighlight()) return
 
   const container = document.getElementById('message-list')!
@@ -234,43 +228,39 @@ function renderMessages(shouldScrollBottom = true) {
   const resultsEl = document.getElementById('search-results')!
   const clearBtn = document.getElementById('clear-search')!
   if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
-  
   resultsEl.style.display = 'block'; clearBtn.style.display = 'block'
-  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching...</div>'
+  resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
   
   try {
     const healthyServers = SERVERS.filter(s => !s.error);
     const searchTasks = healthyServers.map(async (server) => {
       try {
         const res = await fetch(`${server.url}/api/search?q=${encodeURIComponent(query)}`)
+        if (!res.ok) return { server, results: [] }
         const results = await res.json()
         return { server, results }
       } catch (e) { return { server, results: [] } }
     })
 
     const allServerResults = await Promise.all(searchTasks)
-    const flatResults = allServerResults.filter(r => r.results && r.results.length > 0)
-    
+    const flatResults = allServerResults.filter(r => Array.isArray(r.results) && r.results.length > 0)
     if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
     
     resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => {
-      const channel = server.channels.find((c: any) => c.id === group.channelId)
+      const channel = (server.channels || []).find((c: any) => c.id === group.channelId)
       return `
-        <div class="search-result-group" onclick="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}')">
+        <div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}')">
           <div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>
-          ${group.messages.map((m: any) => `
+          ${(group.messages || []).map((m: any) => `
             <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
-              <div class="search-result-header">
-                <span>@${m.handle}</span>
-                <span>${new Date(m.created_at).toLocaleString()}</span>
-              </div>
+              <div class="search-result-header"><span>@${m.handle}</span><span>${new Date(m.created_at).toLocaleString()}</span></div>
               <div class="search-result-content">${m.content}</div>
             </div>
           `).join('')}
         </div>
       `
     }).join('')).join('')
-  } catch (e) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--red); font-size:12px;">Search failed</div>' }
+  } catch (e) { log('Global search failed', e); resultsEl.innerHTML = '<div style="padding:10px; color:var(--red); font-size:12px;">Search failed</div>' }
 };
 
 // --- ACTIONS ---
@@ -344,7 +334,7 @@ async function hydrateServers() {
   if (targetHost) currentServer = SERVERS.find(s => s.host === targetHost)
   if (!currentServer) currentServer = SERVERS[0]
   if (currentServer && !currentServer.error) {
-    if (pathParts[1]) { const decodedName = decodeURIComponent(pathParts[1]); currentChannel = currentServer.channels?.find((c: any) => c.name === decodedName) }
+    if (pathParts[1]) { const decodedName = decodeURIComponent(pathParts[1]); currentChannel = (currentServer.channels || []).find((c: any) => c.name === decodedName) }
     if (!currentChannel && currentServer.channels?.length > 0) currentChannel = currentServer.channels[0]
   }
 }
@@ -390,29 +380,6 @@ function renderChannelList() {
 
 function linkify(text: string) { return text.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: underline;">$1</a>') }
 
-// --- UI HELPERS ---
-(window as any).replyTo = (id: string) => { const msg = currentMessages.find(m => m.id === id); if (!msg) return; replyToMessage = msg; document.getElementById('app-container')!.classList.add('is-replying'); document.getElementById('reply-bar')!.style.display = 'flex'; document.getElementById('reply-text')!.textContent = `Replying to @${msg.handle}`; document.getElementById('message-input')!.focus() };
-(window as any).cancelReply = () => { replyToMessage = null; document.getElementById('app-container')!.classList.remove('is-replying'); document.getElementById('reply-bar')!.style.display = 'none' };
-(window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (container) { if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') } };
-(window as any).selectServer = (host: string) => { const server = SERVERS.find(s => s.host === host); if (server) { currentServer = server; currentChannel = server.channels?.[0] || null; window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(true) } };
-(window as any).selectChannel = (id: string) => { const chan = currentServer.channels.find((c: any) => c.id === id); if (chan) { currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false) } };
-(window as any).enterEditMode = (id: string) => { const contentEl = document.getElementById(`msg-content-${id}`)!; const original = contentEl.textContent!; contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" /><div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button><button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`; document.getElementById(`edit-input-${id}`)?.focus() };
-(window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
-(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') (document.getElementById('server-urls-input') as HTMLTextAreaElement).value = SERVER_URLS.join('\n') };
-(window as any).saveClientSettingsDirect = async (newUrls: string[]) => {
-  const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
-  try {
-    const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const listRes = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
-    const existing = await listRes.json(); for (const record of (existing.records || [])) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey: record.uri.split('/').pop() }) }) }
-    for (const url of newUrls) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() } }) }) }
-  } catch (e) { log('PDS save failed', e) }
-};
-(window as any).saveClientSettings = async () => { setLoading('#client-settings-modal .admin-save-btn', true, 'Syncing...'); const input = (document.getElementById('server-urls-input') as HTMLTextAreaElement).value; const newUrls = input.split('\n').map(u => u.trim()).filter(Boolean); await (window as any).saveClientSettingsDirect(newUrls); location.href = '/' };
-async function showApp(session: any) { (window as any).atprotoSession = session; currentUserDid = session.did; const fetchProfile = async () => { try { const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`; const res = await pdsFetch(session, probeUrl); const profile = await res.json(); if (profile.handle) { currentUserHandle = profile.handle; document.getElementById('user-handle')!.textContent = `@${profile.handle}`; await syncServersFromPds(session); renderAdminUI() } } catch (e) { log('Profile failed', e) } }; await fetchProfile(); document.getElementById('loading-panel')!.style.display = 'none'; document.getElementById('app-container')!.style.display = 'flex' }
-(window as any).startLogin = async () => { const handle = (document.getElementById('handle') as HTMLInputElement).value; if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname); await client.signIn(handle) };
-(window as any).logout = () => { localStorage.clear(); location.href = '/' };
-(window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
-
 const msgList = document.getElementById('message-list');
 if (msgList) {
   msgList.onscroll = () => {
@@ -432,11 +399,10 @@ if (sInput) {
     searchTimeout = setTimeout(() => (window as any).performSearch(e.target.value), 300);
   };
   sInput.onblur = () => {
-    // Small delay to allow click on result
     setTimeout(() => {
       document.getElementById('search-results')!.style.display = 'none'
       document.getElementById('clear-search')!.style.display = 'none'
-    }, 300);
+    }, 400); // More time for mobile touch registration
   };
 }
 
