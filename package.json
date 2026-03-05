@@ -1,0 +1,34 @@
+{
+  "name": "latent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx src/index.ts",
+    "start": "node --enable-source-maps dist/index.js",
+    "build": "tsc -p tsconfig.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@atproto/lexicon": "^0.6.2",
+    "@atproto/oauth-client-node": "^0.3.17",
+    "@atproto/xrpc-server": "^0.10.15",
+    "express": "^5.2.1",
+    "jose": "^6.1.3",
+    "zod": "^4.3.6"
+  }
+}

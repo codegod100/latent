@@ -1,0 +1,11 @@
+{
+  "client_id": "http://localhost?redirect_uri=http%3A%2F%2F127.0.0.1%3A3000%2Fcallback",
+  "client_name": "Local ATProto App",
+  "application_type": "web",
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true,
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "redirect_uris": ["http://127.0.0.1:3000/callback"],
+  "scope": "atproto transition:generic"
+}
