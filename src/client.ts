@@ -186,7 +186,7 @@ function renderMessages(shouldScrollBottom = true) {
 // --- SEARCH & NAVIGATION ---
 (window as any).clearSearch = () => {
   const input = document.getElementById('search-input') as HTMLInputElement
-  if (input) { input.value = ''; }
+  if (input) { input.value = ''; input.focus(); }
   const resultsEl = document.getElementById('search-results');
   const clearBtn = document.getElementById('clear-search');
   if (resultsEl) resultsEl.style.display = 'none';
@@ -260,10 +260,7 @@ function renderMessages(shouldScrollBottom = true) {
         </div>
       `
     }).join('')).join('')
-  } catch (e) { 
-    log('Global search failed', e); 
-    resultsEl.innerHTML = `<div style="padding:10px; color:var(--red); font-size:12px;">Search error: ${e.message || 'Unknown'}</div>` 
-  }
+  } catch (e) { log('Global search failed', e); resultsEl.innerHTML = `<div style="padding:10px; color:var(--red); font-size:12px;">Search error: ${e.message || 'Unknown'}</div>` }
 };
 
 // --- ACTIONS ---
@@ -301,6 +298,19 @@ async function serverMutation(server: any, endpoint: string, body: any) {
 };
 
 // --- SYSTEM ---
+async function showApp(session: any) {
+  (window as any).atprotoSession = session; currentUserDid = session.did;
+  const fetchProfile = async () => {
+    try {
+      const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const probeUrl = `${pdsUrl}/xrpc/app.bsky.actor.getProfile?actor=${session.did}`;
+      const res = await pdsFetch(session, probeUrl); const profile = await res.json();
+      if (profile.handle) { currentUserHandle = profile.handle; document.getElementById('user-handle')!.textContent = `@${profile.handle}`; await syncServersFromPds(session); renderAdminUI() }
+    } catch (e) { log('Profile failed', e) }
+  };
+  await fetchProfile(); document.getElementById('loading-panel')!.style.display = 'none'; document.getElementById('app-container')!.style.display = 'flex'
+}
+(window as any).showApp = showApp;
+
 async function init() {
   try {
     const result = await client.init()
@@ -397,14 +407,10 @@ if (msgList) {
   const input = document.getElementById('handle') as HTMLInputElement;
   const handle = input.value.trim();
   if (!handle) return alert('Please enter your handle');
-  
   log(`Starting login for ${handle}`);
   setLoading('#login-panel button', true, 'Logging in...');
-  
   try {
-    if (window.location.pathname !== '/') {
-      sessionStorage.setItem('latent_return_path', window.location.pathname);
-    }
+    if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname);
     await client.signIn(handle);
   } catch (err: any) {
     log('Login failed', err);
@@ -432,5 +438,7 @@ if (sInput) {
     }, 500); 
   };
 }
+
+(window as any).clearSearchDirect = () => { window.clearSearch(); }
 
 init()
