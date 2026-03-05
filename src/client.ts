@@ -349,11 +349,31 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
 };
 
 (window as any).manualBan = async () => {
-  const did = (document.getElementById('manual-ban-did') as HTMLInputElement).value.trim();
-  if (!did) return alert('Enter the DID');
-  const res = await serverMutation(currentServer, '/api/mod/bans', { did, reason: 'Manual ban' });
-  if (res?.ok) { alert('User banned'); window.refreshBanList(); }
-  else alert('Failed to ban.');
+  const input = document.getElementById('manual-ban-handle') as HTMLInputElement;
+  const handle = input.value.trim();
+  if (!handle) return alert('Enter the handle to ban');
+  
+  setLoading('#manual-ban-btn', true, 'Resolving...');
+  try {
+    // Resolve handle to DID using BlueSky API
+    const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`);
+    if (!res.ok) throw new Error('Could not resolve handle');
+    const { did } = await res.json();
+    
+    log(`Resolved ${handle} to ${did}, banning...`);
+    const banRes = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual ban' });
+    if (banRes?.ok) {
+      alert(`Banned @${handle}`);
+      input.value = '';
+      window.refreshBanList();
+    } else {
+      alert('Failed to submit ban to server.');
+    }
+  } catch (err: any) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    setLoading('#manual-ban-btn', false);
+  }
 };
 
 (window as any).unbanUser = async (did: string) => {
