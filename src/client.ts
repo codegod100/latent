@@ -20,6 +20,7 @@ let currentUserDid: string | null = null
 let currentMessages: any[] = []
 let replyToMessage: any = null
 let ws: WebSocket | null = null
+let currentWsUrl: string | null = null
 
 const client = new BrowserOAuthClient({
   handleResolver: 'https://bsky.social/',
@@ -75,22 +76,37 @@ async function fetchWithTimeout(resource: string, options: any = {}) {
 
 // --- REAL-TIME (WebSocket) ---
 function setupWebSocket() {
-  if (ws) { ws.close(); ws = null; }
   if (!currentServer || !currentChannel || currentServer.error) return;
   if (!currentServer.features?.ws) return;
 
   const protocol = currentServer.url.startsWith('https') ? 'wss' : 'ws';
   const wsUrl = `${currentServer.url.replace(/^https?/, protocol)}/api/ws?channelId=${currentChannel.id}`;
   
+  if (ws && currentWsUrl === wsUrl && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  if (ws) {
+    ws.onclose = null; 
+    ws.close();
+    ws = null;
+  }
+
+  log(`Connecting to WebSocket: ${wsUrl}`);
+  currentWsUrl = wsUrl;
   ws = new WebSocket(wsUrl);
+  
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'new_message') {
-        if (!currentMessages.some(m => m.id === data.message.id)) {
+        const existingIdx = currentMessages.findIndex(m => m.id === data.message.id || (m.optimistic && m.clientId === data.message.clientId));
+        if (existingIdx !== -1) {
+          currentMessages[existingIdx] = { ...data.message, optimistic: false };
+        } else {
           currentMessages.unshift(data.message);
-          renderMessages();
         }
+        renderMessages();
       } else if (data.type === 'edit_message') {
         const idx = currentMessages.findIndex(m => m.id === data.message.id);
         if (idx !== -1) {
@@ -106,7 +122,14 @@ function setupWebSocket() {
       }
     } catch (e) { log('WS Message error', e) }
   };
-  ws.onclose = () => setTimeout(setupWebSocket, 3000);
+
+  ws.onclose = () => {
+    if (currentWsUrl === wsUrl) {
+      log('WebSocket closed. Reconnecting in 3s...');
+      setTimeout(setupWebSocket, 3000);
+    }
+  };
+  ws.onerror = (e) => { log('WebSocket error', e); };
 }
 
 // --- CRYPTO HELPER ---
@@ -139,7 +162,6 @@ async function pdsFetch(session: any, url: string, init: RequestInit = {}) {
   return perform()
 }
 
-// This function exchanges ATProto credentials for a short-lived server session token
 async function authenticateWithServer(server: any) {
   const session = (window as any).atprotoSession; if (!session) return;
   const tokens = await session.getTokenSet();
@@ -362,16 +384,10 @@ async function serverMutation(server: any, endpoint: string, body: any) {
   const parentId = replyToMessage?.id || null
   setLoading('#input-area', true)
   input.value = ''; (window as any).cancelReply();
-  
   const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, parentId });
   setLoading('#input-area', false)
-  if (res?.ok) {
-    // If WebSockets are enabled, the UI will update via the broadcast.
-    // Otherwise, we trigger a manual refresh.
-    if (!currentServer.features?.ws) refreshMessages();
-  } else {
-    alert('Failed to send.')
-  }
+  if (res?.ok && !currentServer.features?.ws) refreshMessages();
+  else if (!res?.ok) alert('Failed to send.');
 };
 
 (window as any).saveEdit = async (id: string) => {
