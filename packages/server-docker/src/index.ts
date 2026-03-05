@@ -24,7 +24,7 @@ const PORT = 8789;
 // 2. REAL-TIME NOTIFIER (Bun implementation)
 let bunServer: any;
 const notifier: Notifier = {
-  broadcast(channelId, data) {
+  async broadcast(channelId, data) {
     if (bunServer) {
       const topic = channelId || 'global';
       bunServer.publish(topic, JSON.stringify(data));

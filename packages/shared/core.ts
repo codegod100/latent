@@ -2,7 +2,7 @@ import { ulid } from 'ulid';
 import { Storage } from './storage';
 
 export interface Notifier {
-  broadcast(channelId: string | null, message: any): void;
+  broadcast(channelId: string | null, message: any): Promise<void>;
 }
 
 export async function handleRequest(
@@ -83,7 +83,7 @@ export async function handleRequest(
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (latent-core)</strong></p>
+          <p>Status: <strong>Active (WebSocket Enabled)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
@@ -97,7 +97,6 @@ export async function handleRequest(
       if (!notifier) {
         return new Response('WebSockets not supported on this node', { status: 501 });
       }
-      // Handled by platform-specific server wrapper
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
     }
 
@@ -112,9 +111,7 @@ export async function handleRequest(
           adminHandle, 
           categories, 
           channels: chanList,
-          features: {
-            ws: !!notifier
-          }
+          features: { ws: !!notifier }
         }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
       }
       if (request.method === 'POST') {
@@ -171,7 +168,10 @@ export async function handleRequest(
       const msgId = ulid();
       const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, created_at: new Date().toISOString() };
       await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
-      if (notifier) notifier.broadcast(msg.channel_id, { type: 'new_message', message: msg });
+      
+      // CRITICAL: Await the broadcast
+      if (notifier) await notifier.broadcast(msg.channel_id, { type: 'new_message', message: msg });
+      
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
 
@@ -182,7 +182,10 @@ export async function handleRequest(
       const success = await storage.updateMessage(id, did, content);
       if (!success) throw { status: 403, error: 'Unauthorized or message not found' };
       const msg = await storage.getMessage(id);
-      if (notifier && msg) notifier.broadcast(msg.channel_id, { type: 'edit_message', message: msg });
+      
+      // CRITICAL: Await the broadcast
+      if (notifier && msg) await notifier.broadcast(msg.channel_id, { type: 'edit_message', message: msg });
+      
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 

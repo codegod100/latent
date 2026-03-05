@@ -960,7 +960,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (latent-core)</strong></p>
+          <p>Status: <strong>Active (WebSocket Enabled)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
@@ -984,9 +984,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
           adminHandle,
           categories,
           channels: chanList,
-          features: {
-            ws: !!notifier
-          }
+          features: { ws: !!notifier }
         }), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
       }
       if (request.method === "POST") {
@@ -1036,7 +1034,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const msgId = ulid();
       const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, created_at: (/* @__PURE__ */ new Date()).toISOString() };
       await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id);
-      if (notifier) notifier.broadcast(msg.channel_id, { type: "new_message", message: msg });
+      if (notifier) await notifier.broadcast(msg.channel_id, { type: "new_message", message: msg });
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
     }
     if (url.pathname === "/api/edit-message" && request.method === "POST") {
@@ -1046,7 +1044,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const success = await storage.updateMessage(id, did, content);
       if (!success) throw { status: 403, error: "Unauthorized or message not found" };
       const msg = await storage.getMessage(id);
-      if (notifier && msg) notifier.broadcast(msg.channel_id, { type: "edit_message", message: msg });
+      if (notifier && msg) await notifier.broadcast(msg.channel_id, { type: "edit_message", message: msg });
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
     return new Response("Not Found", { status: 404, headers });
@@ -1065,12 +1063,10 @@ __name(handleRequest, "handleRequest");
 var NotifierDO = class {
   constructor(state) {
     this.state = state;
-    this.sessions = new Set(this.state.getWebSockets());
   }
   static {
     __name(this, "NotifierDO");
   }
-  sessions = /* @__PURE__ */ new Set();
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/ws") {
@@ -1083,19 +1079,23 @@ var NotifierDO = class {
       return new Response(null, { status: 101, webSocket: client });
     }
     if (url.pathname === "/broadcast" && request.method === "POST") {
-      const { channelId, data } = await request.json();
-      const topic = channelId || "global";
-      this.state.getWebSockets(topic).forEach((ws) => {
-        try {
-          ws.send(JSON.stringify(data));
-        } catch (e) {
-        }
-      });
-      return new Response("ok");
+      try {
+        const { channelId, data } = await request.json();
+        const topic = channelId || "global";
+        const sockets = this.state.getWebSockets(topic);
+        sockets.forEach((ws) => {
+          try {
+            ws.send(JSON.stringify(data));
+          } catch (e) {
+          }
+        });
+        return new Response("ok");
+      } catch (err) {
+        return new Response(String(err), { status: 500 });
+      }
     }
     return new Response("Not Found", { status: 404 });
   }
-  // WebSocket event handlers (using hibernation API for efficiency)
   async webSocketMessage(ws, message) {
   }
   async webSocketClose(ws, code, reason, wasClean) {
@@ -1112,13 +1112,13 @@ var WorkerNotifier = class {
   static {
     __name(this, "WorkerNotifier");
   }
-  broadcast(channelId, data) {
+  async broadcast(channelId, data) {
     const id = this.doNamespace.idFromName("global-notifier");
     const stub = this.doNamespace.get(id);
-    stub.fetch("http://do/broadcast", {
+    await stub.fetch("http://do/broadcast", {
       method: "POST",
       body: JSON.stringify({ channelId, data })
-    }).catch((e) => console.error("DO Broadcast failed", e));
+    });
   }
 };
 
