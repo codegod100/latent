@@ -87,13 +87,10 @@ function setupWebSocket() {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'new_message') {
-        const existingIdx = currentMessages.findIndex(m => m.id === data.message.id || (m.optimistic && m.clientId === data.message.clientId));
-        if (existingIdx !== -1) {
-          currentMessages[existingIdx] = { ...data.message, optimistic: false };
-        } else {
+        if (!currentMessages.some(m => m.id === data.message.id)) {
           currentMessages.unshift(data.message);
+          renderMessages();
         }
-        renderMessages();
       } else if (data.type === 'edit_message') {
         const idx = currentMessages.findIndex(m => m.id === data.message.id);
         if (idx !== -1) {
@@ -323,7 +320,7 @@ function renderMessages() {
           <span class="msg-author">@${m.handle}</span>
           <span class="msg-date">${new Date(m.created_at).toLocaleString()}</span>
         </div>
-        <div class="msg-content" id="msg-content-${m.id}" style="${m.optimistic ? 'opacity: 0.5;' : ''}">${linkify(m.content)}</div>
+        <div class="msg-content" id="msg-content-${m.id}">${linkify(m.content)}</div>
         <div class="reactions-list">${reactionHtml}</div>
       </div>
     `
@@ -362,19 +359,26 @@ async function serverMutation(server: any, endpoint: string, body: any) {
 
 (window as any).submitMessage = async () => {
   const input = document.getElementById('message-input') as HTMLInputElement; const content = input.value.trim(); if (!content) return
-  const tempId = 'opt-' + Math.random().toString(36).substr(2, 9)
-  const optMsg = { id: tempId, did: currentUserDid, handle: currentUserHandle, content, channel_id: currentChannel.id, parent_id: replyToMessage?.id || null, created_at: new Date().toISOString(), optimistic: true, reactions: [], parent: replyToMessage }
-  currentMessages.unshift(optMsg); renderMessages(); (window as any).cancelReply(); input.value = '';
-  const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, clientId: tempId, parentId: optMsg.parent_id });
-  if (res?.ok && res.data.id) { const optIdx = currentMessages.findIndex(m => m.id === tempId); if (optIdx !== -1) currentMessages[optIdx].id = res.data.id }
-  else { currentMessages = currentMessages.filter(m => m.id !== tempId); renderMessages(); alert('Failed to send.') }
+  const parentId = replyToMessage?.id || null
+  setLoading('#input-area', true)
+  input.value = ''; (window as any).cancelReply();
+  
+  const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, parentId });
+  setLoading('#input-area', false)
+  if (res?.ok) {
+    // If WebSockets are enabled, the UI will update via the broadcast.
+    // Otherwise, we trigger a manual refresh.
+    if (!currentServer.features?.ws) refreshMessages();
+  } else {
+    alert('Failed to send.')
+  }
 };
 
 (window as any).saveEdit = async (id: string) => {
   const input = document.getElementById(`edit-input-${id}`) as HTMLInputElement; const content = input.value.trim(); if (!content) return
   setLoading(`#edit-save-${id}`, true, '...');
   const res = await serverMutation(currentServer, '/api/edit-message', { id, content });
-  setLoading(`#edit-save-${id}`, false); if (res?.ok) refreshMessages();
+  setLoading(`#edit-save-${id}`, false); if (res?.ok && !currentServer.features?.ws) refreshMessages();
 };
 
 (window as any).saveServerConfig = async () => {
@@ -443,10 +447,6 @@ async function showApp(session: any) {
 (window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
 
 const inputEl = document.getElementById('message-input');
-if (inputEl) {
-  inputEl.onkeydown = (e) => {
-    if (e.key === 'Enter') (window as any).submitMessage();
-  };
-}
+if (inputEl) { inputEl.onkeydown = (e) => { if (e.key === 'Enter') (window as any).submitMessage() }; }
 
 init()
