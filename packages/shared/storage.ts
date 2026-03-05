@@ -15,39 +15,28 @@ export interface Storage {
   addReaction(messageId: string, did: string, handle: string, emoji: string): Promise<void>;
   removeReaction(messageId: string, did: string, emoji: string): Promise<void>;
   listReactions(messageIds: string[]): Promise<any[]>;
+  
+  // Session Management
+  createSession(token: string, did: string, handle: string, expiresAt: string): Promise<void>;
+  getSession(token: string): Promise<any | null>;
 }
 
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
-  CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);
-  CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0);
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, 
-    did TEXT NOT NULL, 
-    handle TEXT NOT NULL, 
-    content TEXT NOT NULL, 
-    channel_id TEXT, 
-    parent_id TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS reactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id TEXT NOT NULL,
-    did TEXT NOT NULL,
-    handle TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(message_id, did, emoji)
-  );
-`;
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)`,
+  `CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, parent_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE TABLE IF NOT EXISTS reactions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, did TEXT NOT NULL, handle TEXT NOT NULL, emoji TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(message_id, did, emoji))`,
+  `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`
+];
 
 // Implementation for Cloudflare D1
 export class D1Storage implements Storage {
   constructor(private db: D1Database) {}
   
   async ensureTables() {
-    await this.db.exec(SCHEMA);
-    try { await this.db.prepare('ALTER TABLE messages ADD COLUMN channel_id TEXT').run(); } catch (e) {}
+    for (const stmt of SCHEMA_STATEMENTS) { await this.db.prepare(stmt).run(); }
+    try { await this.db.prepare('ALTER TABLE messages ADD COLUMN channel_id TEXT').run(); } catch (e) {} 
     try { await this.db.prepare('ALTER TABLE messages ADD COLUMN parent_id TEXT').run(); } catch (e) {}
   }
 
@@ -64,35 +53,34 @@ export class D1Storage implements Storage {
     await this.db.prepare('INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)').bind(id, catId, name, desc, sortOrder).run(); 
   }
   async deleteChannel(id: string) { await this.db.prepare('DELETE FROM channels WHERE id = ?').bind(id).run(); }
-  
   async listMessages(channelId: string | null) {
     return (await this.db.prepare('SELECT * FROM messages WHERE channel_id = ? OR (channel_id IS NULL AND ? IS NULL) ORDER BY id DESC LIMIT 50').bind(channelId, channelId).all()).results;
   }
-  
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId: string | null = null) {
-    await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(id, did, handle, content, channelId, parentId).run();
+    await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, did, handle, content, channelId, parentId).run();
   }
-
   async getMessage(id: string) { return await this.db.prepare('SELECT * FROM messages WHERE id = ?').bind(id).first(); }
-  
   async updateMessage(id: string, did: string, content: string) {
     const res = await this.db.prepare('UPDATE messages SET content = ? WHERE id = ? AND did = ?').bind(content, id, did).run();
     return res.meta.changes > 0;
   }
-
   async addReaction(messageId: string, did: string, handle: string, emoji: string) {
     await this.db.prepare('INSERT OR IGNORE INTO reactions (message_id, did, handle, emoji) VALUES (?, ?, ?, ?)').bind(messageId, did, handle, emoji).run();
   }
-
   async removeReaction(messageId: string, did: string, emoji: string) {
     await this.db.prepare('DELETE FROM reactions WHERE message_id = ? AND did = ? AND emoji = ?').bind(messageId, did, emoji).run();
   }
-
   async listReactions(messageIds: string[]) {
     if (messageIds.length === 0) return [];
     const placeholders = messageIds.map(() => '?').join(',');
     return (await this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).bind(...messageIds).all()).results;
+  }
+
+  async createSession(token: string, did: string, handle: string, expiresAt: string) {
+    await this.db.prepare('INSERT INTO sessions (token, did, handle, expires_at) VALUES (?, ?, ?, ?)').bind(token, did, handle, expiresAt).run();
+  }
+  async getSession(token: string) {
+    return await this.db.prepare('SELECT * FROM sessions WHERE token = ? AND expires_at > DATETIME("now")').bind(token).first();
   }
 }
 
@@ -100,7 +88,7 @@ export class D1Storage implements Storage {
 export class SQLiteStorage implements Storage {
   constructor(private db: any) {}
   async ensureTables() {
-    this.db.exec(SCHEMA);
+    for (const stmt of SCHEMA_STATEMENTS) { this.db.exec(stmt); }
     try { this.db.prepare('ALTER TABLE messages ADD COLUMN channel_id TEXT').run(); } catch (e) {}
     try { this.db.prepare('ALTER TABLE messages ADD COLUMN parent_id TEXT').run(); } catch (e) {}
   }
@@ -117,34 +105,34 @@ export class SQLiteStorage implements Storage {
     this.db.prepare('INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)').run(id, catId, name, desc, sortOrder); 
   }
   async deleteChannel(id: string) { this.db.prepare('DELETE FROM channels WHERE id = ?').run(id); }
-  
   async listMessages(channelId: string | null) {
     if (channelId) return this.db.prepare('SELECT * FROM messages WHERE channel_id = ? ORDER BY id DESC LIMIT 50').all(channelId);
     return this.db.prepare('SELECT * FROM messages WHERE channel_id IS NULL ORDER BY id DESC LIMIT 50').all();
   }
-  
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId: string | null = null) {
     this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channelId, parentId);
   }
-
   async getMessage(id: string) { return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id); }
-  
   async updateMessage(id: string, did: string, content: string) {
     const res = this.db.prepare('UPDATE messages SET content = ? WHERE id = ? AND did = ?').run(content, id, did);
     return res.changes > 0;
   }
-
   async addReaction(messageId: string, did: string, handle: string, emoji: string) {
     this.db.prepare('INSERT OR IGNORE INTO reactions (message_id, did, handle, emoji) VALUES (?, ?, ?, ?)').run(messageId, did, handle, emoji);
   }
-
   async removeReaction(messageId: string, did: string, emoji: string) {
     this.db.prepare('DELETE FROM reactions WHERE message_id = ? AND did = ? AND emoji = ?').run(messageId, did, emoji);
   }
-
   async listReactions(messageIds: string[]) {
     if (messageIds.length === 0) return [];
     const placeholders = messageIds.map(() => '?').join(',');
     return this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).all(...messageIds);
+  }
+
+  async createSession(token: string, did: string, handle: string, expiresAt: string) {
+    this.db.prepare('INSERT INTO sessions (token, did, handle, expires_at) VALUES (?, ?, ?, ?)').run(token, did, handle, expiresAt);
+  }
+  async getSession(token: string) {
+    return this.db.prepare('SELECT * FROM sessions WHERE token = ? AND expires_at > DATETIME("now")').get(token);
   }
 }

@@ -46,6 +46,17 @@ export async function handleRequest(
 
     // 3. HELPERS
     const verifyIdentity = async (body: any) => {
+      // Check for Session Token first (Bearer)
+      const authHeader = request.headers.get('Authorization');
+      if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.split(' ')[1];
+        const session = await storage.getSession(token);
+        if (session) {
+          return { did: session.did, handle: session.handle };
+        }
+      }
+
+      // Fallback to ATProto verification
       const { accessToken, dpopProof, pdsUrl, did } = body;
       const cacheKey = `${did}:${accessToken}`;
       const cached = identityCache.get(cacheKey);
@@ -87,7 +98,7 @@ export async function handleRequest(
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (latent-core)</strong></p>
+          <p>Status: <strong>Active (Auth Token Enabled)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), 'Content-Type': 'text/html' } });
@@ -97,6 +108,16 @@ export async function handleRequest(
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket upgrade', { status: 400 });
       if (!notifier) return new Response('WebSockets not supported', { status: 501 });
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
+    }
+
+    // --- API: AUTH (Issue short-lived token) ---
+    if (url.pathname === '/api/auth' && request.method === 'POST') {
+      const body = await request.json() as any;
+      const profile = await verifyIdentity(body);
+      const token = ulid(); // Simple unique token
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+      await storage.createSession(token, body.did, profile.handle, expiresAt);
+      return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
     if (url.pathname === '/api/meta') {
@@ -137,20 +158,24 @@ export async function handleRequest(
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
-    // --- MESSAGES (Includes Reactions) ---
+    // --- MESSAGES ---
     if (url.pathname === '/api/messages' && request.method === 'GET') {
       const channelId = url.searchParams.get('channelId');
       const messages = await storage.listMessages(channelId);
       const messageIds = messages.map(m => m.id);
       const allReactions = await storage.listReactions(messageIds);
       
-      // Group reactions by message_id
-      const messagesWithReactions = messages.map(m => ({
+      // Fetch parents for replies to show context
+      const parentIds = Array.from(new Set(messages.filter(m => m.parent_id).map(m => m.parent_id)));
+      const parents = await Promise.all(parentIds.map(id => storage.getMessage(id)));
+
+      const messagesDetailed = messages.map(m => ({
         ...m,
-        reactions: allReactions.filter(r => r.message_id === m.id)
+        reactions: allReactions.filter(r => r.message_id === m.id),
+        parent: m.parent_id ? parents.find(p => p?.id === m.parent_id) : null
       }));
       
-      return new Response(JSON.stringify(messagesWithReactions), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+      return new Response(JSON.stringify(messagesDetailed), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
     if (url.pathname === '/api/submit-message' && request.method === 'POST') {
@@ -158,7 +183,9 @@ export async function handleRequest(
       const profile = await verifyIdentity(body);
       const { did, content, channelId, clientId, parentId } = body;
       const msgId = ulid();
-      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: new Date().toISOString(), clientId, reactions: [] };
+      
+      const parent = parentId ? await storage.getMessage(parentId) : null;
+      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: new Date().toISOString(), clientId, reactions: [], parent };
       
       await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id, msg.parent_id);
       if (notifier) await notifier.broadcast(msg.channel_id, { type: 'new_message', message: msg });
@@ -184,7 +211,6 @@ export async function handleRequest(
       const body = await request.json() as any;
       const profile = await verifyIdentity(body);
       const { messageId, emoji, did } = body;
-      
       await storage.addReaction(messageId, did, profile.handle, emoji);
       const msg = await storage.getMessage(messageId);
       if (notifier && msg) {
@@ -198,7 +224,6 @@ export async function handleRequest(
       const body = await request.json() as any;
       const profile = await verifyIdentity(body);
       const { messageId, emoji, did } = body;
-      
       await storage.removeReaction(messageId, did, emoji);
       const msg = await storage.getMessage(messageId);
       if (notifier && msg) {

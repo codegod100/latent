@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// .wrangler/tmp/bundle-fR9cyg/checked-fetch.js
+// .wrangler/tmp/bundle-i9r0r9/checked-fetch.js
 var urls = /* @__PURE__ */ new Set();
 function checkURL(request, init) {
   const url = request instanceof URL ? request : new URL(
@@ -736,29 +736,14 @@ function parse(toml, { maxDepth = 1e3, integersAsBigInt } = {}) {
 __name(parse, "parse");
 
 // ../shared/storage.ts
-var SCHEMA = `
-  CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
-  CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);
-  CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0);
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, 
-    did TEXT NOT NULL, 
-    handle TEXT NOT NULL, 
-    content TEXT NOT NULL, 
-    channel_id TEXT, 
-    parent_id TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS reactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id TEXT NOT NULL,
-    did TEXT NOT NULL,
-    handle TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(message_id, did, emoji)
-  );
-`;
+var SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)`,
+  `CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, parent_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE TABLE IF NOT EXISTS reactions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, did TEXT NOT NULL, handle TEXT NOT NULL, emoji TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(message_id, did, emoji))`,
+  `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`
+];
 var D1Storage = class {
   constructor(db) {
     this.db = db;
@@ -767,7 +752,9 @@ var D1Storage = class {
     __name(this, "D1Storage");
   }
   async ensureTables() {
-    await this.db.exec(SCHEMA);
+    for (const stmt of SCHEMA_STATEMENTS) {
+      await this.db.prepare(stmt).run();
+    }
     try {
       await this.db.prepare("ALTER TABLE messages ADD COLUMN channel_id TEXT").run();
     } catch (e) {
@@ -825,6 +812,12 @@ var D1Storage = class {
     if (messageIds.length === 0) return [];
     const placeholders = messageIds.map(() => "?").join(",");
     return (await this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).bind(...messageIds).all()).results;
+  }
+  async createSession(token, did, handle, expiresAt) {
+    await this.db.prepare("INSERT INTO sessions (token, did, handle, expires_at) VALUES (?, ?, ?, ?)").bind(token, did, handle, expiresAt).run();
+  }
+  async getSession(token) {
+    return await this.db.prepare('SELECT * FROM sessions WHERE token = ? AND expires_at > DATETIME("now")').bind(token).first();
   }
 };
 
@@ -961,6 +954,14 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       await storage.addChannel(ulid(), null, "general", "General discussion", 0);
     }
     const verifyIdentity = /* @__PURE__ */ __name(async (body) => {
+      const authHeader = request.headers.get("Authorization");
+      if (authHeader?.startsWith("Bearer ")) {
+        const token = authHeader.split(" ")[1];
+        const session = await storage.getSession(token);
+        if (session) {
+          return { did: session.did, handle: session.handle };
+        }
+      }
       const { accessToken, dpopProof, pdsUrl, did } = body;
       const cacheKey = `${did}:${accessToken}`;
       const cached = identityCache.get(cacheKey);
@@ -998,7 +999,7 @@ async function handleRequest(request, storage, configSeed2, notifier) {
             <strong>Server ID:</strong> <code>${serverId}</code><br>
             <strong>Admin:</strong> <code>@${adminHandle}</code>
           </div>
-          <p>Status: <strong>Active (latent-core)</strong></p>
+          <p>Status: <strong>Active (Auth Token Enabled)</strong></p>
         </body>
         </html>
       `, { headers: { ...Object.fromEntries(headers), "Content-Type": "text/html" } });
@@ -1007,6 +1008,14 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       if (request.headers.get("Upgrade") !== "websocket") return new Response("Expected WebSocket upgrade", { status: 400 });
       if (!notifier) return new Response("WebSockets not supported", { status: 501 });
       return new Response(null, { status: 101, headers: { "Upgrade": "websocket", "Connection": "Upgrade" } });
+    }
+    if (url.pathname === "/api/auth" && request.method === "POST") {
+      const body = await request.json();
+      const profile = await verifyIdentity(body);
+      const token = ulid();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1e3).toISOString();
+      await storage.createSession(token, body.did, profile.handle, expiresAt);
+      return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json" } });
     }
     if (url.pathname === "/api/meta") {
       if (request.method === "GET") {
@@ -1057,18 +1066,22 @@ async function handleRequest(request, storage, configSeed2, notifier) {
       const messages = await storage.listMessages(channelId);
       const messageIds = messages.map((m) => m.id);
       const allReactions = await storage.listReactions(messageIds);
-      const messagesWithReactions = messages.map((m) => ({
+      const parentIds = Array.from(new Set(messages.filter((m) => m.parent_id).map((m) => m.parent_id)));
+      const parents = await Promise.all(parentIds.map((id) => storage.getMessage(id)));
+      const messagesDetailed = messages.map((m) => ({
         ...m,
-        reactions: allReactions.filter((r) => r.message_id === m.id)
+        reactions: allReactions.filter((r) => r.message_id === m.id),
+        parent: m.parent_id ? parents.find((p) => p?.id === m.parent_id) : null
       }));
-      return new Response(JSON.stringify(messagesWithReactions), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
+      return new Response(JSON.stringify(messagesDetailed), { headers: { ...Object.fromEntries(headers), "Content-Type": "application/json", "Cache-Control": "no-store" } });
     }
     if (url.pathname === "/api/submit-message" && request.method === "POST") {
       const body = await request.json();
       const profile = await verifyIdentity(body);
       const { did, content, channelId, clientId, parentId } = body;
       const msgId = ulid();
-      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: (/* @__PURE__ */ new Date()).toISOString(), clientId, reactions: [] };
+      const parent = parentId ? await storage.getMessage(parentId) : null;
+      const msg = { id: msgId, did, handle: profile.handle, content, channel_id: channelId || null, parent_id: parentId || null, created_at: (/* @__PURE__ */ new Date()).toISOString(), clientId, reactions: [], parent };
       await storage.addMessage(msg.id, msg.did, msg.handle, msg.content, msg.channel_id, msg.parent_id);
       if (notifier) await notifier.broadcast(msg.channel_id, { type: "new_message", message: msg });
       return new Response(JSON.stringify({ ok: true, id: msgId }), { headers });
@@ -1239,7 +1252,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-fR9cyg/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-i9r0r9/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -1271,7 +1284,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-fR9cyg/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-i9r0r9/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
