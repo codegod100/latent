@@ -742,7 +742,10 @@ var SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, parent_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE TABLE IF NOT EXISTS reactions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, did TEXT NOT NULL, handle TEXT NOT NULL, emoji TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(message_id, did, emoji))`,
-  `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`
+  `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages(channel_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_id_desc ON messages(id DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions(message_id)`
 ];
 var D1Storage = class {
   constructor(db) {
@@ -789,8 +792,16 @@ var D1Storage = class {
   async deleteChannel(id) {
     await this.db.prepare("DELETE FROM channels WHERE id = ?").bind(id).run();
   }
-  async listMessages(channelId) {
-    return (await this.db.prepare("SELECT * FROM messages WHERE channel_id = ? OR (channel_id IS NULL AND ? IS NULL) ORDER BY id DESC LIMIT 50").bind(channelId, channelId).all()).results;
+  async listMessages(channelId, beforeId = null, limit = 50) {
+    let query = "SELECT * FROM messages WHERE (channel_id = ? OR (channel_id IS NULL AND ? IS NULL))";
+    const params = [channelId, channelId];
+    if (beforeId) {
+      query += " AND id < ?";
+      params.push(beforeId);
+    }
+    query += " ORDER BY id DESC LIMIT ?";
+    params.push(limit);
+    return (await this.db.prepare(query).bind(...params).all()).results;
   }
   async addMessage(id, did, handle, content, channelId, parentId = null) {
     await this.db.prepare("INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)").bind(id, did, handle, content, channelId, parentId).run();
@@ -1065,7 +1076,9 @@ async function handleRequest(request, storage, configSeed2, notifier) {
     }
     if (url.pathname === "/api/messages" && request.method === "GET") {
       const channelId = url.searchParams.get("channelId");
-      const messages = await storage.listMessages(channelId);
+      const beforeId = url.searchParams.get("before");
+      const limit = parseInt(url.searchParams.get("limit") || "50");
+      const messages = await storage.listMessages(channelId, beforeId, limit);
       const messageIds = messages.map((m) => m.id);
       const allReactions = await storage.listReactions(messageIds);
       const parentIds = Array.from(new Set(messages.filter((m) => m.parent_id).map((m) => m.parent_id)));

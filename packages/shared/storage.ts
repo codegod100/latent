@@ -8,7 +8,7 @@ export interface Storage {
   listChannels(): Promise<any[]>;
   addChannel(id: string, catId: string | null, name: string, desc: string, sortOrder: number): Promise<void>;
   deleteChannel(id: string): Promise<void>;
-  listMessages(channelId: string | null): Promise<any[]>;
+  listMessages(channelId: string | null, beforeId?: string | null, limit?: number): Promise<any[]>;
   addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId?: string | null): Promise<void>;
   updateMessage(id: string, did: string, content: string): Promise<boolean>;
   getMessage(id: string): Promise<any | null>;
@@ -27,7 +27,10 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, category_id TEXT, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, content TEXT NOT NULL, channel_id TEXT, parent_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE TABLE IF NOT EXISTS reactions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, did TEXT NOT NULL, handle TEXT NOT NULL, emoji TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(message_id, did, emoji))`,
-  `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`
+  `CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, did TEXT NOT NULL, handle TEXT NOT NULL, expires_at DATETIME NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages(channel_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_id_desc ON messages(id DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions(message_id)`
 ];
 
 // Implementation for Cloudflare D1
@@ -53,9 +56,22 @@ export class D1Storage implements Storage {
     await this.db.prepare('INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)').bind(id, catId, name, desc, sortOrder).run(); 
   }
   async deleteChannel(id: string) { await this.db.prepare('DELETE FROM channels WHERE id = ?').bind(id).run(); }
-  async listMessages(channelId: string | null) {
-    return (await this.db.prepare('SELECT * FROM messages WHERE channel_id = ? OR (channel_id IS NULL AND ? IS NULL) ORDER BY id DESC LIMIT 50').bind(channelId, channelId).all()).results;
+  
+  async listMessages(channelId: string | null, beforeId: string | null = null, limit: number = 50) {
+    let query = 'SELECT * FROM messages WHERE (channel_id = ? OR (channel_id IS NULL AND ? IS NULL))';
+    const params: any[] = [channelId, channelId];
+    
+    if (beforeId) {
+      query += ' AND id < ?';
+      params.push(beforeId);
+    }
+    
+    query += ' ORDER BY id DESC LIMIT ?';
+    params.push(limit);
+    
+    return (await this.db.prepare(query).bind(...params).all()).results;
   }
+
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId: string | null = null) {
     await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, did, handle, content, channelId, parentId).run();
   }
@@ -105,10 +121,29 @@ export class SQLiteStorage implements Storage {
     this.db.prepare('INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)').run(id, catId, name, desc, sortOrder); 
   }
   async deleteChannel(id: string) { this.db.prepare('DELETE FROM channels WHERE id = ?').run(id); }
-  async listMessages(channelId: string | null) {
-    if (channelId) return this.db.prepare('SELECT * FROM messages WHERE channel_id = ? ORDER BY id DESC LIMIT 50').all(channelId);
-    return this.db.prepare('SELECT * FROM messages WHERE channel_id IS NULL ORDER BY id DESC LIMIT 50').all();
+  
+  async listMessages(channelId: string | null, beforeId: string | null = null, limit: number = 50) {
+    let query = 'SELECT * FROM messages WHERE ';
+    const params: any[] = [];
+    
+    if (channelId) {
+      query += 'channel_id = ?';
+      params.push(channelId);
+    } else {
+      query += 'channel_id IS NULL';
+    }
+    
+    if (beforeId) {
+      query += ' AND id < ?';
+      params.push(beforeId);
+    }
+    
+    query += ' ORDER BY id DESC LIMIT ?';
+    params.push(limit);
+    
+    return this.db.prepare(query).all(...params);
   }
+
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parentId: string | null = null) {
     this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channelId, parentId);
   }

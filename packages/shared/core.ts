@@ -159,18 +159,25 @@ export async function handleRequest(
       return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
+    // --- MESSAGES ---
     if (url.pathname === '/api/messages' && request.method === 'GET') {
       const channelId = url.searchParams.get('channelId');
-      const messages = await storage.listMessages(channelId);
+      const beforeId = url.searchParams.get('before');
+      const limit = parseInt(url.searchParams.get('limit') || '50');
+      
+      const messages = await storage.listMessages(channelId, beforeId, limit);
       const messageIds = messages.map(m => m.id);
       const allReactions = await storage.listReactions(messageIds);
+      
       const parentIds = Array.from(new Set(messages.filter(m => m.parent_id).map(m => m.parent_id)));
       const parents = await Promise.all(parentIds.map(id => storage.getMessage(id)));
+      
       const messagesDetailed = messages.map(m => ({
         ...m,
         reactions: allReactions.filter(r => r.message_id === m.id),
         parent: m.parent_id ? parents.find(p => p?.id === m.parent_id) : null
       }));
+      
       return new Response(JSON.stringify(messagesDetailed), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
