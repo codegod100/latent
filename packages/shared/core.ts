@@ -121,8 +121,21 @@ export async function handleRequest(
       const channelId = url.searchParams.get('channelId');
       const query = url.searchParams.get('q');
       if (!query) return new Response(JSON.stringify([]), { headers });
-      const results = await storage.searchMessages(channelId, query, 20);
-      return new Response(JSON.stringify(results), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+      
+      const results = await storage.searchMessages(channelId, query, 10);
+      
+      // For each result, fetch 2 messages before and 2 after for context
+      const contextualResults = await Promise.all(results.map(async (m) => {
+        // Simple context: fetch messages with IDs slightly smaller and larger
+        // This is an approximation since ULIDs are chronological
+        const context = await storage.listMessages(channelId, m.id + 'zzzzzz', 5); // Fetch 5 including self
+        return { 
+          targetId: m.id,
+          messages: context.reverse() // Chronological order
+        };
+      }));
+
+      return new Response(JSON.stringify(contextualResults), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
     if (url.pathname === '/api/message-context' && request.method === 'GET') {

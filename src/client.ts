@@ -149,9 +149,7 @@ async function refreshMessages(beforeId: string | null = null) {
     const url = `${currentServer.url}/api/messages?channelId=${currentChannel.id}&limit=${limit}${beforeId ? '&before=' + beforeId : ''}`
     const res = await fetchWithTimeout(url, { timeout: 5000 })
     const data = await res.json()
-    
     if (data.length < limit) hasMoreMessages = false
-    
     if (beforeId) {
       const oldScrollHeight = container.scrollHeight
       currentMessages = [...currentMessages, ...data]
@@ -169,14 +167,12 @@ async function refreshMessages(beforeId: string | null = null) {
 function renderMessages(shouldScrollBottom = true) {
   const container = document.getElementById('message-list')!
   if (currentMessages.length === 0) { container.innerHTML = '<div style="padding:1rem; color:#949ba4;"><em>No messages.</em></div>'; return }
-  
   container.innerHTML = (hasMoreMessages ? '<div id="load-more-indicator" style="text-align:center; padding:10px; color:var(--subtext0); font-size:12px;">Scroll up to load more</div>' : '') + 
     currentMessages.slice().reverse().map((m: any) => {
     const reactionsByEmoji = (m.reactions || []).reduce((acc: any, r: any) => { if (!acc[r.emoji]) acc[r.emoji] = []; acc[r.emoji].push(r.handle); return acc; }, {});
     const myReactions = (m.reactions || []).filter((r: any) => r.did === currentUserDid).map((r: any) => r.emoji);
     const reactionHtml = Object.entries(reactionsByEmoji).map(([emoji, handles]: [string, any]) => `<div class="reaction-chip ${myReactions.includes(emoji) ? 'active' : ''}" onclick="window.toggleReaction('${m.id}', '${emoji}')" title="${handles.join(', ')}"><span>${emoji}</span><span class="reaction-count">${handles.length}</span></div>`).join('');
     const parentMsg = m.parent; 
-
     return `
       <div class="msg-item" id="msg-${m.id}">
         ${parentMsg ? `<div class="msg-reply-to" onclick="window.jumpToMessage('${parentMsg.id}')">
@@ -197,11 +193,17 @@ function renderMessages(shouldScrollBottom = true) {
       </div>
     `
   }).join('')
-  
   if (shouldScrollBottom) container.scrollTop = container.scrollHeight
 }
 
 // --- SEARCH & NAVIGATION ---
+(window as any).clearSearch = () => {
+  const input = document.getElementById('search-input') as HTMLInputElement
+  if (input) input.value = ''
+  document.getElementById('search-results')!.style.display = 'none'
+  document.getElementById('clear-search')!.style.display = 'none'
+};
+
 (window as any).jumpToMessage = async (id: string) => {
   const existingEl = document.getElementById(`msg-${id}`)
   if (existingEl) {
@@ -210,7 +212,6 @@ function renderMessages(shouldScrollBottom = true) {
     setTimeout(() => existingEl.classList.remove('flash-highlight'), 3000)
     return
   }
-
   const container = document.getElementById('message-list')!
   container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Jumping to message...</div></div>`
   try {
@@ -229,17 +230,28 @@ function renderMessages(shouldScrollBottom = true) {
 
 (window as any).performSearch = async (query: string) => {
   const resultsEl = document.getElementById('search-results')!
-  if (!query || query.length < 2) { resultsEl.style.display = 'none'; return }
+  const clearBtn = document.getElementById('clear-search')!
+  if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
+  
   resultsEl.style.display = 'block'
+  clearBtn.style.display = 'block'
   resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching...</div>'
   try {
     const res = await fetch(`${currentServer.url}/api/search?channelId=${currentChannel.id}&q=${encodeURIComponent(query)}`)
     const results = await res.json()
     if (results.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results</div>'; return }
-    resultsEl.innerHTML = results.map((m: any) => `
-      <div class="search-result-item" onclick="window.jumpToMessage('${m.id}'); document.getElementById('search-results').style.display='none'">
-        <div class="search-result-header"><span>@${m.handle}</span><span>${new Date(m.created_at).toLocaleDateString()}</span></div>
-        <div class="search-result-content">${m.content.substring(0, 80)}${m.content.length > 80 ? '...' : ''}</div>
+    
+    resultsEl.innerHTML = results.map((group: any) => `
+      <div class="search-result-group" onclick="window.jumpToMessage('${group.targetId}'); document.getElementById('search-results').style.display='none'">
+        ${group.messages.map((m: any) => `
+          <div class="search-result-item ${m.id === group.targetId ? 'target' : ''}">
+            <div class="search-result-header">
+              <span>@${m.handle}</span>
+              <span>${new Date(m.created_at).toLocaleString()}</span>
+            </div>
+            <div class="search-result-content">${m.content}</div>
+          </div>
+        `).join('')}
       </div>
     `).join('')
   } catch (e) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--red); font-size:12px;">Search failed</div>' }

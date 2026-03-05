@@ -101,15 +101,18 @@
     }
 
     /* Search UI */
-    #search-container { position: relative; margin-left: auto; display: flex; align-items: center; }
-    #search-input { background: var(--crust); border: 1px solid var(--surface0); border-radius: 4px; padding: 4px 8px; color: var(--text); font-size: 13px; width: 140px; transition: width 0.2s; }
+    #search-container { position: relative; margin-left: auto; display: flex; align-items: center; gap: 4px; }
+    #search-input { background: var(--crust); border: 1px solid var(--surface0); border-radius: 4px; padding: 4px 24px 4px 8px; color: var(--text); font-size: 13px; width: 140px; transition: width 0.2s; }
     #search-input:focus { width: 220px; outline: none; border-color: var(--surface2); }
-    #search-results { display: none; position: absolute; top: 40px; right: 0; width: 300px; max-height: 400px; background: var(--mantle); border: 1px solid var(--surface1); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 200; overflow-y: auto; }
-    .search-result-item { padding: 10px; border-bottom: 1px solid var(--surface0); cursor: pointer; }
-    .search-result-item:last-child { border-bottom: none; }
-    .search-result-item:hover { background: var(--surface0); }
-    .search-result-header { font-size: 11px; color: var(--subtext0); margin-bottom: 4px; display: flex; justify-content: space-between; }
-    .search-result-content { font-size: 13px; color: var(--text); word-break: break-word; }
+    #clear-search { position: absolute; right: 8px; cursor: pointer; color: var(--subtext0); font-size: 14px; display: none; }
+    
+    #search-results { display: none; position: absolute; top: 40px; right: 0; width: 340px; max-height: 500px; background: var(--mantle); border: 1px solid var(--surface1); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 200; overflow-y: auto; }
+    .search-result-group { border-bottom: 4px solid var(--crust); padding: 8px 0; cursor: pointer; }
+    .search-result-group:hover { background: var(--surface0); }
+    .search-result-item { padding: 4px 12px; font-size: 12px; opacity: 0.7; }
+    .search-result-item.target { opacity: 1; background: rgba(137, 180, 250, 0.15); border-left: 2px solid var(--blue); }
+    .search-result-header { font-size: 10px; color: var(--subtext0); margin-bottom: 2px; display: flex; justify-content: space-between; }
+    .search-result-content { color: var(--text); word-break: break-word; }
 
     #mobile-menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; }
     #mobile-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5); z-index: 90; }
@@ -182,6 +185,7 @@
         
         <div id="search-container">
           <input id="search-input" placeholder="Search..." autocomplete="off">
+          <span id="clear-search" onclick="window.clearSearch()">×</span>
           <div id="search-results"></div>
         </div>
       </div>
