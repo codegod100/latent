@@ -22,17 +22,19 @@ const storage = new SQLiteStorage(db);
 
 const PORT = 8789;
 
-// 3. REAL-TIME NOTIFIER (Filtered by Auth)
+// 3. AUTHORITATIVE NOTIFIER (Filtered by verified Auth)
 let connectedSockets = new Set<any>();
 const notifier: Notifier = {
   async broadcast(channelId, data) {
     const topic = channelId || 'global';
     const msg = JSON.stringify(data);
     
-    // Auth-aware broadcast
+    // Auth-only broadcast loop
     for (const ws of connectedSockets) {
-      if (ws.data.authenticated && (ws.data.channelId === topic || topic === 'global')) {
-        ws.send(msg);
+      if (ws.data && ws.data.authenticated === true) {
+        if (ws.data.channelId === topic || topic === 'global') {
+          ws.send(msg);
+        }
       }
     }
   }
@@ -45,6 +47,7 @@ const bunServer = Bun.serve({
     const url = new URL(request.url);
     if (url.pathname === '/api/ws') {
       const channelId = url.searchParams.get('channelId') || 'global';
+      // Upgrade immediately, but socket remains 'authenticated: false'
       if (server.upgrade(request, { data: { channelId, authenticated: false } })) return;
     }
     return handleRequest(request, storage, configSeed, notifier);
@@ -59,12 +62,14 @@ const bunServer = Bun.serve({
         if (data.type === 'auth') {
           const session = await storage.getSession(data.token);
           if (!session || await storage.isBanned(session.did)) {
+            console.log(`[WebSocket] Denied auth for DID: ${session?.did || 'unknown'}`);
             ws.send(JSON.stringify({ type: 'error', error: 'Banned' }));
             ws.close(4003, "Banned");
             return;
           }
+          // Promotion: Socket is now authorized to receive broadcasts
           ws.data.authenticated = true;
-          console.log(`[WebSocket] Authenticated: ${session.handle} (${session.did})`);
+          console.log(`[WebSocket] Authenticated & Unlocked: ${session.handle} (${session.did})`);
         }
       } catch (e) {}
     },

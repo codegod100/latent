@@ -16,7 +16,7 @@ export class NotifierDO implements DurableObject {
       const channelId = url.searchParams.get("channelId") || "global";
       const [client, server] = new WebSocketPair();
       
-      // Accept the socket - it will be "unauthenticated" by default
+      // Accept the socket - it starts as unauthenticated
       this.state.acceptWebSocket(server);
       (server as any)._authenticated = false;
       (server as any)._channelId = channelId;
@@ -29,16 +29,20 @@ export class NotifierDO implements DurableObject {
         const { channelId, data } = await request.json() as any;
         const topic = channelId || "global";
         
-        // Manual broadcast to authenticated sockets only
+        // Authoritative Broadcast: Only send to sockets that passed the 'auth' check
         const sockets = this.state.getWebSockets();
+        let sentCount = 0;
         sockets.forEach(ws => {
           const s = ws as any;
-          if (s._authenticated && (s._channelId === topic || topic === "global")) {
-            try { ws.send(JSON.stringify(data)); } catch (e) {}
+          if (s._authenticated === true && (s._channelId === topic || topic === "global")) {
+            try { 
+              ws.send(JSON.stringify(data)); 
+              sentCount++;
+            } catch (e) {}
           }
         });
         
-        return new Response("ok");
+        return new Response(`ok: ${sentCount} recipients`);
       } catch (err) {
         return new Response(String(err), { status: 500 });
       }
@@ -58,18 +62,21 @@ export class NotifierDO implements DurableObject {
         }
 
         const session = await this.storage.getSession(token);
+        // CRITICAL: If no session or user is banned, kill the socket immediately
         if (!session || await this.storage.isBanned(session.did)) {
+          console.log(`[NotifierDO] Denied auth for token ${token?.substring(0,5)}... (Banned or Invalid)`);
           ws.send(JSON.stringify({ type: 'error', error: 'Banned' }));
           ws.close(4003, "Banned");
           return;
         }
 
-        // Mark as authenticated and persist state
+        // Only after this point can the socket receive broadcasts
         (ws as any)._authenticated = true;
-        ws.serialize(); 
-        log(`WebSocket authenticated: ${session.handle} (${session.did})`);
+        log(`WebSocket authenticated and unlocked: ${session.handle} (${session.did})`);
       }
-    } catch (e) {}
+    } catch (e) {
+      log(`WebSocket message error: ${String(e)}`);
+    }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) { ws.close(code, reason); }
