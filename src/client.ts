@@ -84,6 +84,15 @@ function setupWebSocket() {
   if (ws && currentWsUrl === wsUrl && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   if (ws) { ws.onclose = null; ws.close(); ws = null }
   log(`Connecting to WebSocket: ${wsUrl}`); currentWsUrl = wsUrl; ws = new WebSocket(wsUrl);
+  
+  // Send auth token for WebSocket ban check
+  ws.onopen = () => {
+    const s = serverSessions.get(currentServer.url);
+    if (s && new Date(s.expires) > new Date()) {
+      ws?.send(JSON.stringify({ type: 'auth', token: s.token }));
+    }
+  };
+
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
@@ -93,6 +102,9 @@ function setupWebSocket() {
         const idx = currentMessages.findIndex(m => m.id === data.message.id); if (idx !== -1) { currentMessages[idx] = data.message; renderMessages() }
       } else if (data.type === 'reaction_update') {
         const idx = currentMessages.findIndex(m => m.id === data.messageId); if (idx !== -1) { currentMessages[idx].reactions = data.reactions; renderMessages() }
+      } else if (data.type === 'error' && data.error === 'Banned') {
+        alert('You have been banned from this server.');
+        location.reload();
       }
     } catch (e) { log('WS Message error', e) }
   };
@@ -148,8 +160,21 @@ async function refreshMessages(beforeId: string | null = null) {
   try {
     const limit = 50
     const url = `${currentServer.url}/api/messages?channelId=${currentChannel.id}&limit=${limit}${beforeId ? '&before=' + beforeId : ''}`
-    const res = await fetchWithTimeout(url, { timeout: 5000 })
-    const data = await res.json()
+    
+    // Send session token for ban check during fetch
+    const headers: any = {};
+    const s = serverSessions.get(currentServer.url);
+    if (s && new Date(s.expires) > new Date()) headers['Authorization'] = `Bearer ${s.token}`;
+
+    const res = await fetchWithTimeout(url, { timeout: 5000, headers });
+    const data = await res.json();
+    
+    if (res.status === 403) {
+      if (data.banned) container.innerHTML = `<div style="padding:2rem; text-align:center; color:var(--red); font-weight:bold;">${data.error}</div>`;
+      else if (data.inviteOnly) container.innerHTML = `<div style="padding:2rem; text-align:center; color:var(--peach); font-weight:bold;">${data.error}</div>`;
+      return;
+    }
+
     if (data.length < limit) hasMoreMessages = false
     if (beforeId) {
       const oldScrollHeight = container.scrollHeight; currentMessages = [...currentMessages, ...data]; renderMessages(false)
@@ -504,12 +529,23 @@ function renderAll() {
 function renderServerList() {
   const sidebar = document.getElementById('server-sidebar')!; sidebar.innerHTML = SERVERS.map(s => {
     const initial = (s.name && s.name[0]) || '?'; const statusClass = s.error ? 'offline' : ''; const activeClass = s.host === currentServer?.host ? 'active' : ''
-    return `<div class="server-icon-container">
-      <div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>
-      <div class="server-remove" onclick="event.stopPropagation();window.removeServer('${s.host}')">×</div>
-    </div>`
+    return `<div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>`
   }).join('') + `<div class="server-icon add-server" onclick="window.toggleClientSettings()" title="Settings">+</div>`
 }
+
+(window as any).refreshConnectedServersList = () => {
+  const listEl = document.getElementById('connected-servers-list')!;
+  if (SERVERS.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No servers connected.</div>'; return; }
+  listEl.innerHTML = SERVERS.map(s => `
+    <div class="conn-server-item">
+      <div>
+        <div class="conn-server-name">${s.name} ${s.error ? '(Offline)' : ''}</div>
+        <div class="conn-server-url">${s.url}</div>
+      </div>
+      <div class="conn-server-remove" onclick="window.removeServer('${s.host}')">×</div>
+    </div>
+  `).join('');
+};
 
 (window as any).removeServer = async (host: string) => {
   if (confirm(`Disconnect from ${host}?`)) {
@@ -594,7 +630,7 @@ if (msgList) {
 (window as any).selectChannel = (id: string) => { const chan = currentServer.channels.find((c: any) => c.id === id); if (chan) { currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false) } };
 (window as any).enterEditMode = (id: string) => { const contentEl = document.getElementById(`msg-content-${id}`)!; const original = contentEl.textContent!; contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" /><div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button><button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`; document.getElementById(`edit-input-${id}`)?.focus() };
 (window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
-(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') (document.getElementById('new-server-url') as HTMLInputElement).focus() };
+(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') { (window as any).refreshConnectedServersList(); (document.getElementById('new-server-url') as HTMLInputElement).focus() } };
 (window as any).saveClientSettingsDirect = async (newUrls: string[]) => {
   const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
   try {
