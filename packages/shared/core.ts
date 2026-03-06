@@ -107,16 +107,6 @@ export async function handleRequest(
     if (url.pathname === '/api/ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket upgrade', { status: 400 });
       if (!notifier) return new Response('WebSockets not supported', { status: 501 });
-      
-      // Strict Ban Check for WebSockets during handshake
-      const authHeader = request.headers.get('Authorization');
-      if (authHeader?.startsWith('Bearer ')) {
-        const session = await storage.getSession(authHeader.split(' ')[1]);
-        if (session && await storage.isBanned(session.did)) {
-          return new Response('Banned', { status: 403, headers });
-        }
-      }
-      
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
     }
 
@@ -125,15 +115,10 @@ export async function handleRequest(
       return new Response(JSON.stringify({ id: serverId, name: serverName, adminHandle, inviteOnly, categories, channels: chanList, features: { ws: !!notifier } }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
-    // --- PROTECTED READS (Banned users blocked) ---
+    // --- PROTECTED READS (Auth mandatory for ban enforcement) ---
     const enforceReadAccess = async () => {
-      try {
-        await verifyIdentity({}); // Checks token/ban status
-      } catch (e: any) {
-        if (e.banned) throw e;
-        // Block reads if inviteOnly server and no membership
-        if (inviteOnly && e.inviteOnly) throw e;
-      }
+      // Everyone needs auth to see data so we can enforce bans effectively
+      await verifyIdentity({}); 
     };
 
     if (url.pathname === '/api/messages' && request.method === 'GET') {

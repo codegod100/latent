@@ -420,6 +420,68 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
   navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
 };
 
+(window as any).replyTo = (id: string) => {
+  replyToMessage = currentMessages.find(m => m.id === id);
+  if (replyToMessage) {
+    const container = document.getElementById('app-container');
+    if (container) container.classList.add('is-replying');
+    const bar = document.getElementById('reply-bar');
+    const text = document.getElementById('reply-text');
+    if (bar) bar.style.display = 'flex';
+    if (text) text.textContent = `Replying to @${replyToMessage.handle}`;
+    const input = document.getElementById('message-input');
+    if (input) input.focus();
+  }
+};
+
+(window as any).banUser = async (did: string, handle: string) => {
+  const reason = prompt(`Ban @${handle}? Enter reason:`);
+  if (reason !== null) {
+    const res = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason });
+    if (res?.ok) { alert(`Banned @${handle}`); if (document.getElementById('mod-dashboard')!.style.display === 'flex') window.refreshBanList(); }
+    else alert('Failed to ban user.');
+  }
+};
+
+(window as any).manualBan = async () => {
+  const input = document.getElementById('manual-ban-handle') as HTMLInputElement;
+  if (!input) return;
+  const handle = input.value.trim();
+  if (!handle) return alert('Enter the handle to ban');
+  setLoading('#manual-ban-btn', true, 'Resolving...');
+  try {
+    const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`);
+    if (!res.ok) throw new Error('Could not resolve handle');
+    const { did } = await res.json();
+    const banRes = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual ban' });
+    if (banRes?.ok) { alert(`Banned @${handle}`); input.value = ''; window.refreshBanList(); }
+    else alert('Failed to submit ban to server.');
+  } catch (err: any) { alert(`Error: ${err.message}`); } finally { setLoading('#manual-ban-btn', false); }
+};
+
+(window as any).unbanUser = async (did: string) => {
+  if (confirm('Unban this user?')) {
+    const res = await serverMutation(currentServer, '/api/mod/bans', { did }, 'DELETE');
+    if (res?.ok) window.refreshBanList(); else alert('Failed to unban.');
+  }
+};
+
+(window as any).generateInvite = async () => {
+  const res = await serverMutation(currentServer, '/api/mod/invite', {});
+  if (res?.ok && res.data.code) {
+    const url = new URL(window.location.origin);
+    url.pathname = `/${currentServer.host}`;
+    url.searchParams.set('invite', res.data.code);
+    const output = document.getElementById('invite-output')!;
+    output.style.display = 'block';
+    output.textContent = url.toString();
+  } else alert('Failed to generate invite');
+};
+
+(window as any).copyToClipboard = (text: string) => {
+  navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
+};
+
 // --- SYSTEM ---
 async function showApp(session: any) {
   (window as any).atprotoSession = session; currentUserDid = session.did;
