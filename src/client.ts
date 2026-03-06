@@ -34,31 +34,28 @@ const client = new BrowserOAuthClient({
 })
 
 // --- UTILS ---
-const log = (m: string, obj?: any) => {
+function log(m: string, obj?: any) {
   let line = m
   if (obj instanceof Error) line = `${m}: ${obj.message}\n${obj.stack}`
   else if (obj) line = `${m} ${JSON.stringify(obj, null, 2)}`
   console.log(`[${new Date().toLocaleTimeString()}] ${line}`)
 }
 
-const loadMsg = (msg: string) => {
+function loadMsg(msg: string) {
   const el = document.getElementById('load-msg'); if (el) el.textContent = msg
 }
 
 function isAdmin() { return currentUserHandle && currentServer?.adminHandle === currentUserHandle }
-(window as any).isAdmin = isAdmin;
 
 function isModerator() {
   const s = serverSessions.get(currentServer?.url);
   return isAdmin() || (s?.isModerator === true);
 }
-(window as any).isModerator = isModerator;
 
 function renderAdminUI() { 
   const adminBtn = document.getElementById('admin-tools'); if (adminBtn) adminBtn.style.display = isAdmin() ? 'block' : 'none' 
   const modBtn = document.getElementById('mod-tools'); if (modBtn) modBtn.style.display = isModerator() ? 'block' : 'none'
 }
-(window as any).renderAdminUI = renderAdminUI;
 
 function setLoading(selector: string, isLoading: boolean, text: string | null = null) {
   const el = document.querySelector(selector) as HTMLElement
@@ -115,7 +112,7 @@ function setupWebSocket() {
 }
 
 // --- AUTH & PDS ---
-const getDpopProof = async (session: any, method: string, url: string, nonce: string | null = null) => {
+async function getDpopProof(session: any, method: string, url: string, nonce: string | null = null) {
   const tokens = await session.getTokenSet(); const key = (session as any).server.dpopKey; const pub = key.bareJwk
   const jwk = { crv: pub.crv, kty: pub.kty, x: pub.x, y: pub.y }; const alg = key.algorithms.find((a: any) => a.startsWith('ES')) || 'ES256'
   const accessTokenBytes = new TextEncoder().encode(tokens.access_token); const hashBuffer = await crypto.subtle.digest('SHA-256', accessTokenBytes)
@@ -152,15 +149,9 @@ async function authenticateWithServer(server: any) {
   await submit();
 }
 
-// --- RENDERERS (Hoisted) ---
+// --- RENDERERS ---
 function renderServerList() { 
-  const sidebar = document.getElementById('server-sidebar')!; 
-  sidebar.innerHTML = SERVERS.map(s => { 
-    const initial = (s.name && s.name[0]) || '?'; 
-    const statusClass = s.error ? 'offline' : ''; 
-    const activeClass = s.host === currentServer?.host ? 'active' : ''; 
-    return `<div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>` 
-  }).join('') + `<div class="server-icon add-server" onclick="window.toggleClientSettings()" title="Settings">+</div>` 
+  const sidebar = document.getElementById('server-sidebar')!; sidebar.innerHTML = SERVERS.map(s => { const initial = (s.name && s.name[0]) || '?'; const statusClass = s.error ? 'offline' : ''; const activeClass = s.host === currentServer?.host ? 'active' : ''; return `<div class="server-icon ${activeClass} ${statusClass}" onclick="window.selectServer('${s.host}')" title="${s.name || 'Offline'}">${initial}</div>` }).join('') + `<div class="server-icon add-server" onclick="window.toggleClientSettings()" title="Settings">+</div>` 
 }
 
 function renderChannelList() {
@@ -221,7 +212,7 @@ function renderAll() {
   }
 }
 
-// --- ACTIONS & SYSTEM ---
+// --- ACTIONS ---
 async function refreshMessages(beforeId: string | null = null) {
   const container = document.getElementById('message-list')!
   if (!currentChannel || !currentServer || currentServer.error) { container.innerHTML = '<div style="padding:1rem;">Select a channel.</div>'; return }
@@ -263,90 +254,6 @@ async function serverMutation(server: any, endpoint: string, body: any, method: 
   return await submit();
 }
 
-(window as any).performSearch = async (query: string) => {
-  const resultsEl = document.getElementById('search-results')!; const clearBtn = document.getElementById('clear-search')!;
-  if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
-  resultsEl.style.display = 'block'; clearBtn.style.display = 'block'; resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching all servers...</div>'
-  try {
-    const searchTasks = SERVERS.filter(s => !s.error).map(async (server) => { 
-      try { 
-        const res = await serverMutation(server, `/api/search?q=${encodeURIComponent(query)}`, {}, 'GET');
-        return { server, results: res?.ok ? res.data : [] } 
-      } catch (e) { return { server, results: [] } } 
-    })
-    const allServerResults = await Promise.all(searchTasks); const flatResults = allServerResults.filter(r => r.results?.length > 0)
-    if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
-    resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => { const channel = (server.channels || []).find((c: any) => c.id === group.channelId); return `<div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}'); event.preventDefault();"><div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>${(group.messages || []).map((m: any) => `<div class="search-result-item ${m.id === group.targetId ? 'target' : ''}"><div class="search-result-header"><span>@${m.handle}</span><span>${new Date(m.created_at).toLocaleString()}</span></div><div class="search-result-content">${m.content}</div></div>`).join('')}</div>` }).join('')).join('')
-  } catch (e) { log('Global search failed', e); resultsEl.innerHTML = `<div style="padding:10px; color:var(--red); font-size:12px;">Search error</div>` }
-};
-
-(window as any).refreshConnectedServersList = () => {
-  const listEl = document.getElementById('connected-servers-list')!; if (SERVERS.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No servers connected.</div>'; return; }
-  listEl.innerHTML = SERVERS.map(s => `<div class="conn-server-item"><div><div class="conn-server-name">${s.name} ${s.error ? '(Offline)' : ''}</div><div class="conn-server-url">${s.url}</div></div><div class="conn-server-remove" onclick="window.removeServer('${s.host}')">×</div></div>`).join('');
-};
-
-(window as any).replyTo = (id: string) => { replyToMessage = currentMessages.find(m => m.id === id); if (replyToMessage) { const container = document.getElementById('app-container'); if (container) container.classList.add('is-replying'); const bar = document.getElementById('reply-bar'); const text = document.getElementById('reply-text'); if (bar) bar.style.display = 'flex'; if (text) text.textContent = `Replying to @${replyToMessage.handle}`; const input = document.getElementById('message-input'); if (input) input.focus(); } };
-(window as any).cancelReply = () => { replyToMessage = null; const container = document.getElementById('app-container'); if (container) container.classList.remove('is-replying'); const bar = document.getElementById('reply-bar'); if (bar) bar.style.display = 'none'; };
-(window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (container) { if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') } };
-(window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
-(window as any).logout = () => { localStorage.clear(); location.href = '/' };
-(window as any).startLogin = async () => { setLoading('#login-panel button', true, 'Logging in...'); const input = document.getElementById('handle') as HTMLInputElement; const handle = input.value.trim(); if (!handle) return alert('Enter handle'); try { if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname); await client.signIn(handle); } catch (err: any) { log('Login failed', err); setLoading('#login-panel button', false); alert(err.message); } };
-(window as any).selectServer = (host: string) => { const server = SERVERS.find(s => s.host === host); if (server) { currentServer = server; currentChannel = server.channels?.[0] || null; window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(true) } };
-(window as any).selectChannel = (id: string) => { const chan = currentServer.channels.find((c: any) => c.id === id); if (chan) { currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false) } };
-(window as any).enterEditMode = (id: string) => { const contentEl = document.getElementById(`msg-content-${id}`)!; const original = contentEl.textContent!; contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" /><div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button><button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`; document.getElementById(`edit-input-${id}`)?.focus() };
-(window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
-(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') { (window as any).refreshConnectedServersList(); (document.getElementById('new-server-url') as HTMLInputElement).focus() } };
-(window as any).saveClientSettingsDirect = async (newUrls: string[]) => { const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return } try { const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const listRes = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`); const existing = await listRes.json(); for (const record of (existing.records || [])) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey: record.uri.split('/').pop() }) }) } for (const url of newUrls) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() } }) }) } } catch (e) { log('PDS save failed', e) } };
-(window as any).removeServer = async (host: string) => { if (confirm(`Disconnect from ${host}?`)) { SERVER_URLS = SERVER_URLS.filter(u => new URL(u).host !== host); if ((window as any).atprotoSession) await window.saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)); location.reload(); } };
-(window as any).addServerAction = async () => { const input = document.getElementById('new-server-url') as HTMLInputElement; const url = input.value.trim(); if (!url) return; try { const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 5000 }); if (!res.ok) throw new Error('Error'); SERVER_URLS.push(url); if ((window as any).atprotoSession) await window.saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)); location.reload(); } catch (e) { alert('Offline or invalid'); } };
-(window as any).saveServerConfig = async () => { const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim(); const inviteOnly = (document.getElementById('invite-only-toggle') as HTMLInputElement).checked; setLoading('#admin-menu .admin-save-btn', true, 'Saving...'); const res = await serverMutation(currentServer, '/api/meta', { name, inviteOnly }); setLoading('#admin-menu .admin-save-btn', false); if (res?.ok) { currentServer.name = name; currentServer.inviteOnly = inviteOnly; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' } };
-(window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
-(window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await serverMutation(currentServer, `/api/categories/${id}`, { method: 'DELETE' })).ok) location.reload() };
-(window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
-(window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
-
-// --- MODERATION ---
-(window as any).toggleModDashboard = async () => { const modal = document.getElementById('mod-dashboard')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') { window.refreshBanList(); if (isAdmin()) { document.getElementById('moderator-mgmt-section')!.style.display = 'block'; window.refreshModeratorList(); } } };
-(window as any).refreshBanList = async () => { const listEl = document.getElementById('ban-list')!; listEl.innerHTML = 'Loading...'; const res = await serverMutation(currentServer, '/api/mod/bans', {}, 'GET'); if (res?.ok && Array.isArray(res.data)) { if (res.data.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No active bans.</div>'; return; } listEl.innerHTML = res.data.map((b: any) => `<div class="ban-item"><div class="ban-info"><div class="ban-handle">${b.handle ? '@' + b.handle : b.did}</div><div class="ban-did">${b.did}</div></div><button class="unban-btn" onclick="window.unbanUser('${b.did}')">Unban</button></div>`).join(''); } else { listEl.innerHTML = 'Failed to load bans.'; } };
-(window as any).banUser = async (did: string, handle: string) => { const reason = prompt(`Ban @${handle}? Enter reason:`); if (reason !== null) { const res = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason }); if (res?.ok) { alert(`Banned @${handle}`); if (document.getElementById('mod-dashboard')!.style.display === 'flex') window.refreshBanList(); } else alert('Failed to ban user.'); } };
-(window as any).manualBan = async () => { const input = document.getElementById('manual-ban-handle') as HTMLInputElement; if (!input) return; const handle = input.value.trim(); if (!handle) return alert('Enter handle'); setLoading('#manual-ban-btn', true, 'Resolving...'); try { const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`); if (!res.ok) throw new Error('Could not resolve'); const { did } = await res.json(); const banRes = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual' }); if (banRes?.ok) { alert(`Banned @${handle}`); input.value = ''; window.refreshBanList(); } else alert('Failed'); } catch (e: any) { alert(e.message); } finally { setLoading('#manual-ban-btn', false); } };
-(window as any).unbanUser = async (did: string) => { if (confirm('Unban?')) { if ((await serverMutation(currentServer, '/api/mod/bans', { did }, 'DELETE'))?.ok) window.refreshBanList(); } };
-
-(window as any).refreshModeratorList = async () => {
-  const listEl = document.getElementById('moderator-list')!; listEl.innerHTML = 'Loading...';
-  const res = await serverMutation(currentServer, '/api/mod/moderators', {}, 'GET');
-  if (res?.ok && Array.isArray(res.data)) {
-    if (res.data.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No moderators assigned.</div>'; return; }
-    listEl.innerHTML = res.data.map((m: any) => `<div class="mod-item"><div class="mod-info"><div class="mod-handle">@${m.handle}</div><div class="mod-did">${m.did}</div></div><button class="unmod-btn" onclick="window.unmodUser('${m.did}')">Remove</button></div>`).join('');
-  } else { listEl.innerHTML = 'Failed to load mods.'; }
-};
-
-(window as any).addModerator = async () => {
-  const input = document.getElementById('new-mod-handle') as HTMLInputElement; const handle = input.value.trim(); if (!handle) return;
-  setLoading('#add-mod-btn', true, '...');
-  try {
-    const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`);
-    if (!res.ok) throw new Error('Invalid handle');
-    const { did } = await res.json();
-    const modRes = await serverMutation(currentServer, '/api/mod/moderators', { did, handle });
-    if (modRes?.ok) { alert(`Added @${handle} as moderator`); input.value = ''; window.refreshModeratorList(); }
-    else alert(modRes?.data?.error || 'Failed to add mod');
-  } catch (e: any) { alert(e.message); } finally { setLoading('#add-mod-btn', false); }
-};
-
-(window as any).unmodUser = async (did: string) => {
-  if (confirm('Remove moderator status?')) {
-    if ((await serverMutation(currentServer, '/api/mod/moderators', { did }, 'DELETE'))?.ok) window.refreshModeratorList();
-  }
-};
-
-(window as any).generateInvite = async () => {
-  const res = await serverMutation(currentServer, '/api/mod/invite', {});
-  if (res?.ok && res.data.code) { const url = new URL(window.location.origin); url.pathname = `/${currentServer.host}`; url.searchParams.set('invite', res.data.code); const output = document.getElementById('invite-output')!; output.style.display = 'block'; output.textContent = url.toString(); } else alert('Failed to generate invite');
-};
-(window as any).copyToClipboard = (text: string) => { navigator.clipboard.writeText(text).then(() => alert('Copied!')); };
-
-// --- SYSTEM ---
 async function showApp(session: any) {
   (window as any).atprotoSession = session; currentUserDid = session.did;
   const fetchProfile = async () => {
@@ -371,7 +278,6 @@ async function showApp(session: any) {
   };
   await fetchProfile(); document.getElementById('loading-panel')!.style.display = 'none'; document.getElementById('app-container')!.style.display = 'flex'
 }
-(window as any).showApp = showApp;
 
 async function init() {
   try {
@@ -395,7 +301,7 @@ async function hydrateServers() {
     try {
       const proto = targetHost.includes('127.0.0.1') ? 'http' : 'https'; const discoverUrl = `${proto}://${targetHost}`
       const res = await fetchWithTimeout(`${discoverUrl}/api/meta`, { timeout: 10000 });
-      if (res.ok) { const meta = await res.json(); if (confirm(`Join "${meta.name}" (${targetHost})?`)) { SERVER_URLS.push(discoverUrl); if ((window as any).atprotoSession) await (window as any).saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)) } }
+      if (res.ok) { const meta = await res.json(); if (confirm(`Join "${meta.name}" (${targetHost})?`)) { SERVER_URLS.push(discoverUrl); if ((window as any).atprotoSession) await saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)) } }
     } catch (e) { log(`Discovery failed for ${targetHost}`, e) }
   }
   SERVERS = await Promise.all(SERVER_URLS.map(async (url) => {
@@ -416,12 +322,77 @@ async function syncServersFromPds(session: any) {
     const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, '')
     const res = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
     const data = await res.json(); let pdsUrls = data.records?.map((r: any) => r.value.url) || []
-    SERVER_URLS = Array.from(new Set([...pdsUrls, ...SERVER_URLS, ...DEFAULT_SERVER_URLS])); if (pdsUrls.length !== SERVER_URLS.length) await window.saveClientSettingsDirect(SERVER_URLS)
+    SERVER_URLS = Array.from(new Set([...pdsUrls, ...SERVER_URLS, ...DEFAULT_SERVER_URLS])); if (pdsUrls.length !== SERVER_URLS.length) await saveClientSettingsDirect(SERVER_URLS)
   } catch (e) { SERVER_URLS = DEFAULT_SERVER_URLS }
   await hydrateServers(); for (const s of SERVERS) if (!s.error) authenticateWithServer(s);
 }
 
+async function saveClientSettingsDirect(newUrls: string[]) {
+  const session = (window as any).atprotoSession; if (!session) { localStorage.setItem('atproto_servers', JSON.stringify(newUrls)); return }
+  try {
+    const tokens = await session.getTokenSet(); const pdsUrl = tokens.aud.replace(/\/+$/, ''); const listRes = await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.listRecords?repo=${session.did}&collection=org.latha.latent.server`)
+    const existing = await listRes.json(); for (const record of (existing.records || [])) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', rkey: record.uri.split('/').pop() }) }) }
+    for (const url of newUrls) { await pdsFetch(session, `${pdsUrl}/xrpc/com.atproto.repo.createRecord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: session.did, collection: 'org.latha.latent.server', record: { $type: 'org.latha.latent.server', url, createdAt: new Date().toISOString() } }) }) }
+  } catch (e) { log('PDS save failed', e) }
+}
+
 function linkify(text: string) { return text.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: underline;">$1</a>') }
+
+// --- GLOBAL EXPORTS ---
+(window as any).jumpToPresent = () => { refreshMessages() };
+(window as any).jumpToMessage = async (id: string, serverHost?: string, channelId?: string) => {
+  if (serverHost && serverHost !== currentServer?.host) { const targetServer = SERVERS.find(s => s.host === serverHost); if (!targetServer) return; currentServer = targetServer; currentChannel = (targetServer.channels || []).find((c: any) => c.id === channelId) || targetServer.channels?.[0]; renderAll() } 
+  else if (channelId && channelId !== currentChannel?.id) { currentChannel = (currentServer.channels || []).find((c: any) => c.id === channelId) || currentServer.channels?.[0]; renderAll() }
+  const checkAndHighlight = () => { const el = document.getElementById(`msg-${id}`); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash-highlight'); setTimeout(() => el.classList.remove('flash-highlight'), 3000); window.clearSearch(); return true } return false }
+  if (checkAndHighlight()) return;
+  const container = document.getElementById('message-list')!; container.innerHTML = `<div class="loading-container"><div class="big-spinner"></div><div>Jumping to message...</div></div>`
+  try { const res = await fetch(`${currentServer.url}/api/message-context?channelId=${currentChannel.id}&id=${id}`); currentMessages = await res.json(); hasMoreMessages = true; renderMessages(false); setTimeout(checkAndHighlight, 100) } catch (e) { log('Jump failed', e) }
+};
+
+(window as any).performSearch = async (query: string) => {
+  const resultsEl = document.getElementById('search-results')!; const clearBtn = document.getElementById('clear-search')!;
+  if (!query || query.length < 2) { resultsEl.style.display = 'none'; clearBtn.style.display = 'none'; return }
+  resultsEl.style.display = 'block'; clearBtn.style.display = 'block'; resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">Searching...</div>'
+  try {
+    const searchTasks = SERVERS.filter(s => !s.error).map(async (server) => { try { const res = await serverMutation(server, `/api/search?q=${encodeURIComponent(query)}`, {}, 'GET'); return { server, results: res?.ok ? res.data : [] } } catch (e) { return { server, results: [] } } })
+    const allServerResults = await Promise.all(searchTasks); const flatResults = allServerResults.filter(r => r.results?.length > 0)
+    if (flatResults.length === 0) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--subtext0); font-size:12px;">No results found.</div>'; return }
+    resultsEl.innerHTML = flatResults.map(({ server, results }) => results.map((group: any) => { const channel = (server.channels || []).find((c: any) => c.id === group.channelId); return `<div class="search-result-group" onmousedown="window.jumpToMessage('${group.targetId}', '${server.host}', '${group.channelId}'); event.preventDefault();"><div class="search-result-location">${server.name} > #${channel?.name || 'unknown'}</div>${(group.messages || []).map((m: any) => `<div class="search-result-item ${m.id === group.targetId ? 'target' : ''}"><div class="search-result-header"><span>@${m.handle}</span><span>${new Date(m.created_at).toLocaleString()}</span></div><div class="search-result-content">${m.content}</div></div>`).join('')}</div>` }).join('')).join('')
+  } catch (e) { resultsEl.innerHTML = '<div style="padding:10px; color:var(--red);">Search failed</div>' }
+};
+
+(window as any).toggleReaction = async (messageId: string, emoji: string) => { const msg = currentMessages.find(m => m.id === messageId); if (!msg) return; const isRemoving = (msg.reactions || []).some((r: any) => r.did === currentUserDid && r.emoji === emoji); await serverMutation(currentServer, isRemoving ? '/api/unreact' : '/api/react', { messageId, emoji }); };
+(window as any).submitMessage = async () => { const input = document.getElementById('message-input') as HTMLInputElement; const content = input.value.trim(); if (!content) return; const parentId = replyToMessage?.id || null; setLoading('#input-area', true); input.value = ''; (window as any).cancelReply(); const res = await serverMutation(currentServer, '/api/submit-message', { content, channelId: currentChannel.id, parentId }); setLoading('#input-area', false); if (res?.status === 403) alert(res.data.error); else if (res?.ok && !currentServer.features?.ws) refreshMessages(); else if (!res?.ok) alert('Failed to send.'); };
+(window as any).saveEdit = async (id: string) => { const input = document.getElementById(`edit-input-${id}`) as HTMLInputElement; const content = input.value.trim(); if (!content) return; setLoading(`#edit-save-${id}`, true, '...'); const res = await serverMutation(currentServer, '/api/edit-message', { id, content }); setLoading(`#edit-save-${id}`, false); if (res?.ok && !currentServer.features?.ws) refreshMessages(); };
+(window as any).replyTo = (id: string) => { replyToMessage = currentMessages.find(m => m.id === id); if (replyToMessage) { const container = document.getElementById('app-container'); if (container) container.classList.add('is-replying'); const bar = document.getElementById('reply-bar'); const text = document.getElementById('reply-text'); if (bar) bar.style.display = 'flex'; if (text) text.textContent = `Replying to @${replyToMessage.handle}`; const input = document.getElementById('message-input'); if (input) input.focus(); } };
+(window as any).cancelReply = () => { replyToMessage = null; const container = document.getElementById('app-container'); if (container) container.classList.remove('is-replying'); const bar = document.getElementById('reply-bar'); if (bar) bar.style.display = 'none'; };
+(window as any).toggleMenu = (open: boolean) => { const container = document.getElementById('app-container')!; if (container) { if (open) container.classList.add('menu-open'); else container.classList.remove('menu-open') } };
+(window as any).toggleAdminMenu = () => { const menu = document.getElementById('admin-menu')!; menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'; if (menu.style.display === 'flex') (document.getElementById('new-server-name') as HTMLInputElement).value = currentServer?.name || '' };
+(window as any).logout = () => { localStorage.clear(); location.href = '/' };
+(window as any).startLogin = async () => { setLoading('#login-panel button', true, 'Logging in...'); const input = document.getElementById('handle') as HTMLInputElement; const handle = input.value.trim(); if (!handle) return alert('Enter handle'); try { if (window.location.pathname !== '/') sessionStorage.setItem('latent_return_path', window.location.pathname); await client.signIn(handle); } catch (err: any) { log('Login failed', err); setLoading('#login-panel button', false); alert(err.message); } };
+(window as any).selectServer = (host: string) => { const server = SERVERS.find(s => s.host === host); if (server) { currentServer = server; currentChannel = server.channels?.[0] || null; window.history.pushState({}, '', `/${currentServer.host}${currentChannel ? '/' + encodeURIComponent(currentChannel.name) : ''}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(true) } };
+(window as any).selectChannel = (id: string) => { const chan = currentServer.channels.find((c: any) => c.id === id); if (chan) { currentChannel = chan; window.history.pushState({}, '', `/${currentServer.host}/${encodeURIComponent(currentChannel.name)}`); renderAll(); if (window.innerWidth <= 768) (window as any).toggleMenu(false) } };
+(window as any).enterEditMode = (id: string) => { const contentEl = document.getElementById(`msg-content-${id}`)!; const original = contentEl.textContent!; contentEl.innerHTML = `<input type="text" id="edit-input-${id}" class="edit-input" value="${original.replace(/"/g, '&quot;')}" /><div class="edit-actions"><button onclick="window.saveEdit('${id}')" class="edit-save" id="edit-save-${id}">Save</button><button onclick="window.cancelEdit('${id}', '${original.replace(/'/g, "\\'")}')" class="edit-cancel">Cancel</button></div>`; document.getElementById(`edit-input-${id}`)?.focus() };
+(window as any).cancelEdit = (id: string, original: string) => { document.getElementById(`msg-content-${id}`)!.textContent = original };
+(window as any).toggleClientSettings = () => { const modal = document.getElementById('client-settings-modal')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') { (window as any).refreshConnectedServersList(); (document.getElementById('new-server-url') as HTMLInputElement).focus() } };
+(window as any).removeServer = async (host: string) => { if (confirm(`Disconnect from ${host}?`)) { SERVER_URLS = SERVER_URLS.filter(u => new URL(u).host !== host); if ((window as any).atprotoSession) await saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)); location.reload(); } };
+(window as any).addServerAction = async () => { const input = document.getElementById('new-server-url') as HTMLInputElement; const url = input.value.trim(); if (!url) return; try { const res = await fetchWithTimeout(`${url}/api/meta`, { timeout: 5000 }); if (!res.ok) throw new Error('Error'); SERVER_URLS.push(url); if ((window as any).atprotoSession) await saveClientSettingsDirect(SERVER_URLS); else localStorage.setItem('atproto_servers', JSON.stringify(SERVER_URLS)); location.reload(); } catch (e) { alert('Offline or invalid'); } };
+(window as any).saveServerConfig = async () => { const name = (document.getElementById('new-server-name') as HTMLInputElement).value.trim(); const inviteOnly = (document.getElementById('invite-only-toggle') as HTMLInputElement).checked; setLoading('#admin-menu .admin-save-btn', true, 'Saving...'); const res = await serverMutation(currentServer, '/api/meta', { name, inviteOnly }); setLoading('#admin-menu .admin-save-btn', false); if (res?.ok) { currentServer.name = name; currentServer.inviteOnly = inviteOnly; renderAll(); document.getElementById('admin-menu')!.style.display = 'none' } };
+(window as any).addCategory = async () => { const name = prompt('Category Name:'); if (name && (await serverMutation(currentServer, '/api/categories', { name })).ok) location.reload() };
+(window as any).deleteCategory = async (id: string) => { if (confirm('Delete category?') && (await serverMutation(currentServer, `/api/categories/${id}`, { method: 'DELETE' })).ok) location.reload() };
+(window as any).promptAddChannel = async (catId: string | null = null) => { const name = prompt('Channel Name:'); if (name && (await serverMutation(currentServer, '/api/channels', { name, category_id: catId })).ok) location.reload() };
+(window as any).deleteChannel = async (id: string) => { if (confirm('Delete channel?') && (await serverMutation(currentServer, `/api/channels/${id}`, { method: 'DELETE' })).ok) location.reload() };
+(window as any).toggleModDashboard = async () => { const modal = document.getElementById('mod-dashboard')!; modal.style.display = modal.style.display === 'none' ? 'flex' : 'none'; if (modal.style.display === 'flex') { window.refreshBanList(); if (isAdmin()) { document.getElementById('moderator-mgmt-section')!.style.display = 'block'; window.refreshModeratorList(); } } };
+(window as any).refreshBanList = async () => { const listEl = document.getElementById('ban-list')!; listEl.innerHTML = 'Loading...'; const res = await serverMutation(currentServer, '/api/mod/bans', {}, 'GET'); if (res?.ok && Array.isArray(res.data)) { if (res.data.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No active bans.</div>'; return; } listEl.innerHTML = res.data.map((b: any) => `<div class="ban-item"><div class="ban-info"><div class="ban-handle">${b.handle ? '@' + b.handle : b.did}</div><div class="ban-did">${b.did}</div></div><button class="unban-btn" onclick="window.unbanUser('${b.did}')">Unban</button></div>`).join(''); } else { listEl.innerHTML = 'Failed to load bans.'; } };
+(window as any).banUser = async (did: string, handle: string) => { const reason = prompt(`Ban @${handle}? Enter reason:`); if (reason !== null) { const res = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason }); if (res?.ok) { alert(`Banned @${handle}`); if (document.getElementById('mod-dashboard')!.style.display === 'flex') window.refreshBanList(); } else alert('Failed to ban user.'); } };
+(window as any).manualBan = async () => { const input = document.getElementById('manual-ban-handle') as HTMLInputElement; if (!input) return; const handle = input.value.trim(); if (!handle) return alert('Enter handle'); setLoading('#manual-ban-btn', true, 'Resolving...'); try { const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`); if (!res.ok) throw new Error('Could not resolve'); const { did } = await res.json(); const banRes = await serverMutation(currentServer, '/api/mod/bans', { did, handle, reason: 'Manual' }); if (banRes?.ok) { alert(`Banned @${handle}`); input.value = ''; window.refreshBanList(); } else alert('Failed'); } catch (e: any) { alert(e.message); } finally { setLoading('#manual-ban-btn', false); } };
+(window as any).unbanUser = async (did: string) => { if (confirm('Unban?')) { if ((await serverMutation(currentServer, '/api/mod/bans', { did }, 'DELETE'))?.ok) window.refreshBanList(); } };
+(window as any).refreshModeratorList = async () => { const listEl = document.getElementById('moderator-list')!; listEl.innerHTML = 'Loading...'; const res = await serverMutation(currentServer, '/api/mod/moderators', {}, 'GET'); if (res?.ok && Array.isArray(res.data)) { if (res.data.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No moderators assigned.</div>'; return; } listEl.innerHTML = res.data.map((m: any) => `<div class="mod-item"><div class="mod-info"><div class="mod-handle">@${m.handle}</div><div class="mod-did">${m.did}</div></div><button class="unmod-btn" onclick="window.unmodUser('${m.did}')">Remove</button></div>`).join(''); } else { listEl.innerHTML = 'Failed to load mods.'; } };
+(window as any).addModerator = async () => { const input = document.getElementById('new-mod-handle') as HTMLInputElement; const handle = input.value.trim(); if (!handle) return; setLoading('#add-mod-btn', true, '...'); try { const res = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`); if (!res.ok) throw new Error('Invalid handle'); const { did } = await res.json(); const modRes = await serverMutation(currentServer, '/api/mod/moderators', { did, handle }); if (modRes?.ok) { alert(`Added @${handle} as moderator`); input.value = ''; window.refreshModeratorList(); } else alert(modRes?.data?.error || 'Failed to add mod'); } catch (e: any) { alert(e.message); } finally { setLoading('#add-mod-btn', false); } };
+(window as any).unmodUser = async (did: string) => { if (confirm('Remove moderator status?')) { if ((await serverMutation(currentServer, '/api/mod/moderators', { did }, 'DELETE'))?.ok) window.refreshModeratorList(); } };
+(window as any).generateInvite = async () => { const res = await serverMutation(currentServer, '/api/mod/invite', {}); if (res?.ok && res.data.code) { const url = new URL(window.location.origin); url.pathname = `/${currentServer.host}`; url.searchParams.set('invite', res.data.code); const output = document.getElementById('invite-output')!; output.style.display = 'block'; output.textContent = url.toString(); } else alert('Failed to generate invite'); };
+(window as any).copyToClipboard = (text: string) => { navigator.clipboard.writeText(text).then(() => alert('Copied!')); };
+(window as any).refreshConnectedServersList = () => { const listEl = document.getElementById('connected-servers-list')!; if (SERVERS.length === 0) { listEl.innerHTML = '<div style="color:var(--surface2); font-size:12px;">No servers connected.</div>'; return; } listEl.innerHTML = SERVERS.map(s => `<div class="conn-server-item"><div><div class="conn-server-name">${s.name} ${s.error ? '(Offline)' : ''}</div><div class="conn-server-url">${s.url}</div></div><div class="conn-server-remove" onclick="window.removeServer('${s.host}')">×</div></div>`).join(''); };
 
 const msgList = document.getElementById('message-list');
 if (msgList) {
