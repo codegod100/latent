@@ -23,6 +23,12 @@ export interface Storage {
   listBans(): Promise<any[]>;
   isBanned(did: string): Promise<boolean>;
 
+  // Moderators
+  addModerator(did: string, handle: string): Promise<void>;
+  removeModerator(did: string): Promise<void>;
+  listModerators(): Promise<any[]>;
+  isModerator(did: string): Promise<boolean>;
+
   // Invites & Membership
   createInvite(code: string): Promise<void>;
   useInvite(code: string, did: string): Promise<boolean>;
@@ -44,6 +50,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS bans (did TEXT PRIMARY KEY, handle TEXT, reason TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE TABLE IF NOT EXISTS members (did TEXT PRIMARY KEY, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE TABLE IF NOT EXISTS moderators (did TEXT PRIMARY KEY, handle TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages(channel_id)`,
   `CREATE INDEX IF NOT EXISTS idx_messages_id_desc ON messages(id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions(message_id)`
@@ -72,6 +79,7 @@ export class D1Storage implements Storage {
     await this.db.prepare('INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)').bind(id, catId, name, desc, sortOrder).run(); 
   }
   async deleteChannel(id: string) { await this.db.prepare('DELETE FROM channels WHERE id = ?').bind(id).run(); }
+  
   async listMessages(channelId: string | null, beforeId: string | null = null, limit: number = 50) {
     let query = 'SELECT * FROM messages WHERE (channel_id = ? OR (channel_id IS NULL AND ? IS NULL))';
     const params: any[] = [channelId, channelId];
@@ -80,6 +88,7 @@ export class D1Storage implements Storage {
     params.push(limit);
     return (await this.db.prepare(query).bind(...params).all()).results;
   }
+
   async searchMessages(channelId: string | null, query: string, limit: number = 20) {
     let sql = 'SELECT * FROM messages WHERE ';
     const params: any[] = [];
@@ -89,6 +98,7 @@ export class D1Storage implements Storage {
     const res = await this.db.prepare(sql).bind(...params).all();
     return res.results;
   }
+
   async addMessage(id: string, did: string, handle: string, content: string, channelId: string | null, parent_id: string | null = null) {
     await this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, did, handle, content, channelId, parent_id).run();
   }
@@ -108,10 +118,16 @@ export class D1Storage implements Storage {
     const placeholders = messageIds.map(() => '?').join(',');
     return (await this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).bind(...messageIds).all()).results;
   }
+
   async addBan(did: string, handle: string | null, reason: string) { await this.db.prepare('INSERT OR REPLACE INTO bans (did, handle, reason) VALUES (?, ?, ?)').bind(did, handle || '', reason).run(); }
   async removeBan(did: string) { await this.db.prepare('DELETE FROM bans WHERE did = ?').bind(did).run(); }
   async listBans() { return (await this.db.prepare('SELECT * FROM bans ORDER BY created_at DESC').all()).results; }
   async isBanned(did: string) { return !!(await this.db.prepare('SELECT did FROM bans WHERE did = ?').bind(did).first()); }
+
+  async addModerator(did: string, handle: string) { await this.db.prepare('INSERT OR REPLACE INTO moderators (did, handle) VALUES (?, ?)').bind(did, handle).run(); }
+  async removeModerator(did: string) { await this.db.prepare('DELETE FROM moderators WHERE did = ?').bind(did).run(); }
+  async listModerators() { return (await this.db.prepare('SELECT * FROM moderators ORDER BY created_at DESC').all()).results; }
+  async isModerator(did: string) { return !!(await this.db.prepare('SELECT did FROM moderators WHERE did = ?').bind(did).first()); }
 
   async createInvite(code: string) { await this.db.prepare('INSERT INTO invites (code) VALUES (?)').bind(code).run(); }
   async useInvite(code: string, did: string) {
@@ -155,6 +171,7 @@ export class SQLiteStorage implements Storage {
     this.db.prepare('INSERT INTO channels (id, category_id, name, description, sort_order) VALUES (?, ?, ?, ?, ?)').run(id, catId, name, desc, sortOrder); 
   }
   async deleteChannel(id: string) { this.db.prepare('DELETE FROM channels WHERE id = ?').run(id); }
+  
   async listMessages(channelId: string | null, beforeId: string | null = null, limit: number = 50) {
     let query = 'SELECT * FROM messages WHERE ';
     const params: any[] = [];
@@ -164,6 +181,7 @@ export class SQLiteStorage implements Storage {
     params.push(limit);
     return this.db.prepare(query).all(...params);
   }
+
   async searchMessages(channelId: string | null, query: string, limit: number = 20) {
     let sql = 'SELECT * FROM messages WHERE ';
     const params: any[] = [];
@@ -172,6 +190,7 @@ export class SQLiteStorage implements Storage {
     params.push(`%${query}%`, limit);
     return this.db.prepare(sql).all(...params);
   }
+
   async addMessage(id: string, did: string, handle: string, content: string, channel_id: string | null, parent_id: string | null = null) {
     this.db.prepare('INSERT INTO messages (id, did, handle, content, channel_id, parent_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, did, handle, content, channel_id, parent_id);
   }
@@ -191,10 +210,16 @@ export class SQLiteStorage implements Storage {
     const placeholders = messageIds.map(() => '?').join(',');
     return this.db.prepare(`SELECT * FROM reactions WHERE message_id IN (${placeholders})`).all(...messageIds);
   }
+
   async addBan(did: string, handle: string | null, reason: string) { this.db.prepare('INSERT OR REPLACE INTO bans (did, handle, reason) VALUES (?, ?, ?)').run(did, handle || '', reason); }
   async removeBan(did: string) { this.db.prepare('DELETE FROM bans WHERE did = ?').run(did); }
   async listBans() { return this.db.prepare('SELECT * FROM bans ORDER BY created_at DESC').all(); }
   async isBanned(did: string) { return !!this.db.prepare('SELECT did FROM bans WHERE did = ?').get(did); }
+
+  async addModerator(did: string, handle: string) { this.db.prepare('INSERT OR REPLACE INTO moderators (did, handle) VALUES (?, ?)').run(did, handle); }
+  async removeModerator(did: string) { this.db.prepare('DELETE FROM moderators WHERE did = ?').run(did); }
+  async listModerators() { return this.db.prepare('SELECT * FROM moderators ORDER BY created_at DESC').all(); }
+  async isModerator(did: string) { return !!this.db.prepare('SELECT did FROM moderators WHERE did = ?').get(did); }
 
   async createInvite(code: string) { this.db.prepare('INSERT INTO invites (code) VALUES (?)').run(code); }
   async useInvite(code: string, did: string) {

@@ -115,11 +115,11 @@
     .search-result-content { color: var(--text); word-break: break-word; }
 
     /* Mod Dashboard Styles */
-    .ban-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--base); border-radius: 4px; margin-bottom: 8px; }
-    .ban-info { font-size: 13px; }
-    .ban-handle { color: var(--pink); font-weight: bold; }
-    .ban-did { font-size: 10px; color: var(--surface2); }
-    .unban-btn { background: var(--red); color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+    .ban-item, .mod-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--base); border-radius: 4px; margin-bottom: 8px; }
+    .ban-info, .mod-info { font-size: 13px; }
+    .ban-handle, .mod-handle { color: var(--pink); font-weight: bold; }
+    .ban-did, .mod-did { font-size: 10px; color: var(--surface2); }
+    .unban-btn, .unmod-btn { background: var(--red); color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
 
     /* Connected Server List in Modal */
     .conn-server-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--base); border-radius: 6px; margin-bottom: 8px; border: 1px solid var(--surface0); }
@@ -131,7 +131,7 @@
     #mobile-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5); z-index: 90; }
 
     #admin-menu, #client-settings-modal, #mod-dashboard { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 500; padding: 20px; }
-    .modal-card { background: var(--mantle); width: 100%; max-width: 440px; border-radius: 8px; padding: 24px; border: 1px solid var(--surface0); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+    .modal-card { background: var(--mantle); width: 100%; max-width: 440px; border-radius: 8px; padding: 24px; border: 1px solid var(--surface0); box-shadow: 0 8px 24px rgba(0,0,0,0.4); max-height: 90vh; overflow-y: auto; }
     .admin-input { width: 100%; padding: 12px; background: var(--base); border: 1px solid var(--surface0); border-radius: 4px; color: var(--text); box-sizing: border-box; font-size: 16px; }
     .admin-save-btn { width: 100%; padding: 12px; background: var(--blue); color: var(--crust); border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 12px; }
 
@@ -227,12 +227,25 @@
             <div style="cursor:pointer; font-size: 24px;" onclick="toggleModDashboard()">×</div>
           </div>
           
-          <div style="margin-bottom: 20px;">
+          <!-- Admin Only: Moderator Management -->
+          <div id="moderator-mgmt-section" style="margin-bottom: 24px; display: none;">
+            <label style="display:block; font-size: 12px; color: var(--subtext0); text-transform: uppercase; margin-bottom: 8px; font-weight: bold;">Server Moderators</label>
+            <div id="moderator-list" style="max-height: 150px; overflow-y: auto; background: var(--crust); padding: 8px; border-radius: 4px; margin-bottom: 12px;">
+              Loading...
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <input id="new-mod-handle" class="admin-input" placeholder="mod-handle.bsky.social" style="font-size: 14px;">
+              <button id="add-mod-btn" onclick="window.addModerator()" class="admin-save-btn" style="background: var(--mauve); color: white; width: auto; margin-top: 0; white-space: nowrap;">Add Mod</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 24px;">
             <label style="display:block; font-size: 12px; color: var(--subtext0); text-transform: uppercase; margin-bottom: 8px; font-weight: bold;">Banned Users</label>
-            <div id="ban-list" style="max-height: 200px; overflow-y: auto; background: var(--crust); padding: 8px; border-radius: 4px;">
+            <div id="ban-list" style="max-height: 150px; overflow-y: auto; background: var(--crust); padding: 8px; border-radius: 4px;">
               Loading...
             </div>
           </div>
+          
           <div style="margin-top: 20px;">
             <label style="display:block; font-size: 12px; color: var(--subtext0); text-transform: uppercase; margin-bottom: 8px; font-weight: bold;">Manual Ban (Handle)</label>
             <input id="manual-ban-handle" class="admin-input" placeholder="user.bsky.social" style="margin-bottom: 8px;">

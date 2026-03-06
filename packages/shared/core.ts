@@ -92,6 +92,13 @@ export async function handleRequest(
       return profile;
     };
 
+    const verifyModerator = async (body: any) => {
+      const profile = await verifyIdentity(body);
+      if (profile.handle === adminHandle) return profile;
+      if (await storage.isModerator(profile.did)) return profile;
+      throw { status: 403, error: 'Moderator only' };
+    };
+
     const createToken = async (did: string, handle: string) => {
       const token = ulid();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -107,6 +114,16 @@ export async function handleRequest(
     if (url.pathname === '/api/ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket upgrade', { status: 400 });
       if (!notifier) return new Response('WebSockets not supported', { status: 501 });
+      
+      // Strict Ban Check for WebSockets during handshake
+      const authHeader = request.headers.get('Authorization');
+      if (authHeader?.startsWith('Bearer ')) {
+        const session = await storage.getSession(authHeader.split(' ')[1]);
+        if (session && await storage.isBanned(session.did)) {
+          return new Response('Banned', { status: 403, headers });
+        }
+      }
+      
       return new Response(null, { status: 101, headers: { 'Upgrade': 'websocket', 'Connection': 'Upgrade' } });
     }
 
@@ -176,7 +193,8 @@ export async function handleRequest(
       const body = await request.json() as any;
       const profile = await verifyIdentity(body);
       const { token, expiresAt } = await createToken(profile.did, profile.handle);
-      return new Response(JSON.stringify({ token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+      const isMod = profile.handle === adminHandle || await storage.isModerator(profile.did);
+      return new Response(JSON.stringify({ token, expiresAt, isModerator: isMod }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
     // --- JOIN (INVITES) ---
@@ -190,17 +208,16 @@ export async function handleRequest(
       return new Response(JSON.stringify({ ok: true, token, expiresAt }), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
     }
 
-    // --- MODERATION (BANS/INVITES) ---
+    // --- MODERATION (BANS/INVITES/MODS) ---
     if (url.pathname === '/api/mod/bans') {
       if (request.method === 'GET') {
-        const profile = await verifyIdentity({});
-        if (profile.handle !== adminHandle) throw { status: 403, error: 'Admin only' };
+        const profile = await verifyModerator({});
         const bans = await storage.listBans();
         return new Response(JSON.stringify(bans), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
       }
       if (request.method === 'POST' || request.method === 'DELETE') {
         const body = await (async () => { try { return await request.json() } catch(e) { return {} } })();
-        await verifyAdmin(body);
+        await verifyModerator(body);
         if (request.method === 'POST') {
           await storage.addBan(body.did, body.handle || null, body.reason || '');
           return new Response(JSON.stringify({ ok: true }), { headers });
@@ -214,10 +231,30 @@ export async function handleRequest(
 
     if (url.pathname === '/api/mod/invite' && request.method === 'POST') {
       const body = await request.json() as any;
-      await verifyAdmin(body);
+      await verifyModerator(body);
       const code = 'INV-' + ulid();
       await storage.createInvite(code);
       return new Response(JSON.stringify({ ok: true, code }), { headers });
+    }
+
+    if (url.pathname === '/api/mod/moderators') {
+      if (request.method === 'GET') {
+        const profile = await verifyModerator({});
+        const mods = await storage.listModerators();
+        return new Response(JSON.stringify(mods), { headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' } });
+      }
+      if (request.method === 'POST' || request.method === 'DELETE') {
+        const body = await (async () => { try { return await request.json() } catch(e) { return {} } })();
+        await verifyAdmin(body); // Only admin can add/remove mods
+        if (request.method === 'POST') {
+          await storage.addModerator(body.did, body.handle);
+          return new Response(JSON.stringify({ ok: true }), { headers });
+        }
+        if (request.method === 'DELETE') {
+          await storage.removeModerator(body.did);
+          return new Response(JSON.stringify({ ok: true }), { headers });
+        }
+      }
     }
 
     // --- WRITE OPERATIONS (Identity required) ---
